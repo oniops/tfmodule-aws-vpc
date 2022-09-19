@@ -174,75 +174,76 @@ resource "aws_vpn_connection_route" "azure" {
 
 ## Input Variables
 
-| Name | Description | Type | Example | Required |
-|------|-------------|------|---------|:--------:|
-| create_vpc | VPC 를 생성할지 여부입니다. | bool | true | No |
-| cidr       | VPC CIDR 블럭을 정의 합니다. | string | "172.11.0.0/16"| Yes |
-| secondary_cidr_blocks | IP 주소 풀을 확장하기 위해 VP C와 연결할 보조 CIDR 블록을 정의 합니다. | list(string) | ["10.1.0.0/16", "10.2.0.0/16"] | No |
-| public_subnets       | Public 서브넷의 CIDR 블럭을 정의 합니다. | list(string)  | ["10.1.111.0/24", "10.1.112.0/24"] | No |
-| public_subnet_names  | Public 서브넷의 이름을 정의 합니다. | list(string)  | ["pub-a1", "pub-b2"] | No |
-| public_subnet_suffix  | Public 서브넷의 접미어 입니다. | string | "pub" | No |
-| public_subnet_tags  | Public 서브넷에 추가 할 태그 속성 입니다. | map(string) | { Key1 = "Value1" } | No |
-| private_subnets       | Private 서브넷의 CIDR 블럭을 정의 합니다. | list(string)  | ["10.1.21.0/24", "10.1.22.0/24"] | No |
-| private_subnet_names  | Private 서브넷의 이름을 정의 합니다. | list(string)  | ["pri-a1", "pri-b2"] | No |
-| private_subnet_suffix | Private 서브넷의 접미어 입니다. | string | "pri" | No |
-| private_subnet_tags  | Private 서브넷에 추가 할 태그 속성 입니다. | map(string) | { Key1 = "Value1" } | No |
-| database_subnets       | 데이터베이스 서브넷의 CIDR 블럭을 정의 합니다. | list(string)  | ["10.1.91.0/24", "10.1.92.0/24"] | No |
-| database_subnet_names  | 데이터베이스 서브넷의 이름을 정의 합니다. | list(string)  | ["data-a1", "data-b2"] | No |
-| database_subnet_suffix | 데이터베이스 서브넷의 접미어 입니다. | string | "data" | No |
-| database_subnet_tags   | 데이터베이스 서브넷에 추가 할 태그 속성 입니다. | map(string) | { Key1 = "Value1" } | No |
-| database_subnet_group_tags| 데이터베이스 서브넷 그룹에 추가 할 태그 속성 입니다. | map(string) | { Key1 = "Value1" } | No |
-| intra_subnets       | Intranet 서브넷의 CIDR 블럭을 정의 합니다. | list(string)  |  ["10.1.81.0/24", "10.1.82.0/24"] | No |
-| intra_subnet_names  | Intranet 서브넷의 이름을 정의 합니다. | list(string)  | ["int-a1", "int-b2"] | No |
-| intra_subnet_suffix | Intranet 서브넷의 접미어 입니다. | string | "int" | No |
-| intra_subnet_tags   | Intranet 서브넷에 추가 할 태그 속성 입니다. | map(string) | { Key1 = "Value1" } | No |
-| create_database_subnet_route_table    | 데이터베이스 서브넷용 라우팅 테이블 생성 여부를 설정합니다. | bool | false | No |
-| create_database_subnet_group    | RDS 전용 서브넷 생성 여부입니다. database_subnets 이 정의된 경우에만 반응 합니다. | bool | true | No |
-| create_database_internet_gateway_route  | 공용 데이터베이스 액세스를 위한 인터넷 게이트웨이를 생성 할 것인지 여부를 설정합니다. | bool | false | No |
-| create_database_nat_gateway_route  | 데이터베이스 서브넷에 대한 인터넷 액세스를 위해 전용 NAT 를 생성해야 하는지 여부를 설정합니다. | bool | false | No |
-| azs       | 가용 영역 아이디 목록 입니다. 가용 영역은 AWS Region 마다 다르며, EC2 콘솔 화면에서 확인할 수 있습니다. | list(string)  |  ["apne2-az1", "apne2-az2"] | No |
-| enable_dns_hostnames  | VPC 에서 DNS 호스트 이름 검색을 활성화 할 것인지 여부입니다. | bool | true | No |
-| enable_dns_support   | VPC 에서 DNS 지원을 활성화 할 것인지 여부입니다. | bool | true | No |
-| enable_nat_gateway   | NAT 게이트웨이를 생성할 것인지 여부입니다. | bool | false | No |
-| single_nat_gateway   | 하나의 NAT 게이트웨이를 생성할 것인지 여부입니다. | bool | false | No |
-| one_nat_gateway_per_az  | 가용 영역별로 NAT 게이트웨이를 생성할 것인지 여부입니다. | bool | false | No |
-| customer_gateways | 고객 게이트웨이 맵(BGP ASN 및 게이트웨이의 인터넷 라우팅 가능한 외부 IP 주소)을 정의 합니다. | map(map(any)) | <pre>customer_gateways = {<br>  IP1 = {<br>    bgp_asn = 65112<br>    ip_address = "1.2.3.4"<br>    device_name = "some_name"<br>  },<br>  IP2 = {<br>    bgp_asn = 65112<br>    ip_address = "5.6.7.8"<br>  }<br>}</pre> | No |
-| enable_vpn_gateway | 신규 VPN Gateway 리소스를 생성하여 VPC 에 연결할 것 인지 여부입니다. | bool | false | No |
-| vpn_gateway_id | VPC 에 추가 할 VPN 게이트웨이 아이디 입니다.| string | example | No |
-| tags | VPC 및 연관된 리소스에 추가할 tag 속성 입니다. | map(any) | { Project = "startek" } | No |
-| vpc_tags | VPC 리소스에 추가할 tag 속성 입니다. | map(any) | { Name = "my-vpc" } | No |
-| public_acl_tags | Public ACL 리소스에 추가할 tag 속성 입니다. | map(any) | { Key = "my-value-1" } | No |
-| private_acl_tags | Private ACL 리소스에 추가할 tag 속성 입니다. | map(any) | { Key = "my-value-1" } | No |
-| intra_acl_tags | 인트라넷 ACL 리소스에 추가할 tag 속성 입니다. | map(any) | { Key = "my-value-1" } | No |
-| database_acl_tags | 데이터베이스 ACL 리소스에 추가할 tag 속성 입니다. | map(any) | { Key = "my-value-1" } | No |
-| customer_gateway_tags | 커스터머 GW 리소스에 추가할 tag 속성 입니다. | map(any) | { Key = "my-value-1" } | No |
-| vpn_gateway_tags | VPN GW 리소스에 추가할 tag 속성 입니다. | map(any) | { Key = "my-value-1" } | No |
-| vpc_flow_log_tags | VPC Flow 리소스에 추가할 tag 속성 입니다. | map(any) | { Key = "my-value-1" } | No |
-| manage_default_network_acl | 기본 NACL 정책을 적용할지 여부입니다. | bool | false | No |
-| default_network_acl_name | 기본 NACL 이름 입니다. | string | "my-nacl" | No |
-| default_network_acl_tags | 기본 NACL 태그 속성 입니다. | map(any) | { Key = "my-value-1" } | No |
-| public_dedicated_network_acl | 공용 서브넷에 대한 전용 네트워크 ACL 및 사용자 지정 규칙을 사용할지 여부 입니다. | bool | false | No |
-| private_dedicated_network_acl | Private 서브넷에 대한 전용 네트워크 ACL 및 사용자 지정 규칙을 사용할지 여부 입니다. | bool | false | No |
-| intra_dedicated_network_acl | Intranet 서브넷에 대한 전용 네트워크 ACL 및 사용자 지정 규칙을 사용할지 여부 입니다. | bool | false | No |
-| database_dedicated_network_acl | 데이터베이 서브넷에 대한 전용 네트워크 ACL 및 사용자 지정 규칙을 사용할지 여부 입니다. | bool | false | No |
-| default_security_group_name | VPC 에 포함될 기본 보안 그룹 이름 입니다. | string | "my-default-vpc-sg" | No |
-| default_security_group_ingress | 기본 보안 그룹의 Ingress 룰 입니다. | list(map(string)) | <pre>[<br>  {<br>    cidr_blocks = ["172.11.21.0/24"]<br>    description = "SSH"<br>    from_port   = "22"<br>    to_port     = "22"<br>    protocol    = "tcp"<br>  },<br>  {<br>    cidr_blocks = ["172.11.21.0/24"]<br>    description = "TLS"<br>    from_port   = "443"<br>    to_port     = "443"<br>    protocol    = "tcp"<br>  }<br>]</pre> | No |
-| default_security_group_egress | 기본 보안 그룹의 Egress 룰 입니다. | list(map(string)) | <pre>[<br>  {<br>    cidr_blocks = "0.0.0.0/0"<br>    description = "Outbound HTTP"<br>    from_port   = "80"<br>    to_port     = "80"<br>    protocol    = "tcp"<br>  },<br>]</pre> | No |
-| enable_flow_log | VPC Flow log 생성 여부입니다. | bool | false | No |
-| create_flow_log_cloudwatch_log_group | VPC Flow Logs용 CloudWatch 로그 그룹 생성 여부입니다. | bool | false | No |
-| create_flow_log_cloudwatch_iam_role | VPC Flow Logs용 CloudWatch IAM 롤 생성 여부입니다. | bool | false | No |
-| flow_log_traffic_type | VPC Flow Logs 의 네트워크 전송 트래픽 유형입니다. (ACCEPT, REJECT, ALL) | string | "ALL" | No |
-| flow_log_destination_type | VPC Flow Logs 의 데이터가 적재되는 타겟 입니다. (s3, cloud-watch-logs) | string | "cloud-watch-logs" | No |
-| flow_log_log_format | VPC Flow Logs 의 데이터가 적재되는 파일 포멧입니다.(plain-text, parquet) | string | "parquet" | No |
-| flow_log_destination_arn | VPC Flow Logs 데이터가 적재될 대상 리소스 ARN 입니다. (s3, cloud-watch-logs) | string | - | No |
-| flow_log_cloudwatch_iam_role_arn | VPC Flow Logs용 CloudWatch IAM 롤의 ARN 입니다. | string | - | No |
-| flow_log_cloudwatch_log_group_name_prefix | VPC Flow Logs 용 Cloud CloudWatch 로그 그룹 경로 접두어 입니다. | string | "/aws/vpc-flow-log/" | No |
+| Name                                            | Description                                                         | Type | Example | Required |
+|-------------------------------------------------|---------------------------------------------------------------------|------|---------|:--------:|
+| create_vpc                                      | VPC 를 생성할지 여부입니다.                                                   | bool | true | No |
+| cidr                                            | VPC CIDR 블럭을 정의 합니다.                                                | string | "172.11.0.0/16"| Yes |
+| secondary_cidr_blocks                           | IP 주소 풀을 확장하기 위해 VP C와 연결할 보조 CIDR 블록을 정의 합니다.                      | list(string) | ["10.1.0.0/16", "10.2.0.0/16"] | No |
+| public_subnets                                  | Public 서브넷의 CIDR 블럭을 정의 합니다.                                        | list(string)  | ["10.1.111.0/24", "10.1.112.0/24"] | No |
+| public_subnet_names                             | Public 서브넷의 이름을 정의 합니다.                                             | list(string)  | ["pub-a1", "pub-b2"] | No |
+| public_subnet_suffix                            | Public 서브넷의 접미어 입니다.                                                | string | "pub" | No |
+| public_subnet_tags                              | Public 서브넷에 추가 할 태그 속성 입니다.                                         | map(string) | { Key1 = "Value1" } | No |
+| private_subnets                                 | Private 서브넷의 CIDR 블럭을 정의 합니다.                                       | list(string)  | ["10.1.21.0/24", "10.1.22.0/24"] | No |
+| private_subnet_names                            | Private 서브넷의 이름을 정의 합니다.                                            | list(string)  | ["pri-a1", "pri-b2"] | No |
+| private_subnet_suffix                           | Private 서브넷의 접미어 입니다.                                               | string | "pri" | No |
+| private_subnet_tags                             | Private 서브넷에 추가 할 태그 속성 입니다.                                        | map(string) | { Key1 = "Value1" } | No |
+| database_subnets                                | 데이터베이스 서브넷의 CIDR 블럭을 정의 합니다.                                        | list(string)  | ["10.1.91.0/24", "10.1.92.0/24"] | No |
+| database_subnet_names                           | 데이터베이스 서브넷의 이름을 정의 합니다.                                             | list(string)  | ["data-a1", "data-b2"] | No |
+| database_subnet_suffix                          | 데이터베이스 서브넷의 접미어 입니다.                                                | string | "data" | No |
+| database_subnet_tags                            | 데이터베이스 서브넷에 추가 할 태그 속성 입니다.                                         | map(string) | { Key1 = "Value1" } | No |
+| database_subnet_group_tags                      | 데이터베이스 서브넷 그룹에 추가 할 태그 속성 입니다.                                      | map(string) | { Key1 = "Value1" } | No |
+| intra_subnets                                   | Intranet 서브넷의 CIDR 블럭을 정의 합니다.                                      | list(string)  |  ["10.1.81.0/24", "10.1.82.0/24"] | No |
+| intra_subnet_names                              | Intranet 서브넷의 이름을 정의 합니다.                                           | list(string)  | ["int-a1", "int-b2"] | No |
+| intra_subnet_suffix                             | Intranet 서브넷의 접미어 입니다.                                              | string | "int" | No |
+| intra_subnet_tags                               | Intranet 서브넷에 추가 할 태그 속성 입니다.                                       | map(string) | { Key1 = "Value1" } | No |
+| create_database_subnet_route_table              | 데이터베이스 서브넷용 라우팅 테이블 생성 여부를 설정합니다.                                   | bool | false | No |
+| create_database_subnet_group                    | RDS 전용 서브넷 생성 여부입니다. database_subnets 이 정의된 경우에만 반응 합니다.            | bool | true | No |
+| create_database_internet_gateway_route          | 공용 데이터베이스 액세스를 위한 인터넷 게이트웨이를 생성 할 것인지 여부를 설정합니다.                    | bool | false | No |
+| create_database_nat_gateway_route               | 데이터베이스 서브넷에 대한 인터넷 액세스를 위해 전용 NAT 를 생성해야 하는지 여부를 설정합니다.             | bool | false | No |
+| azs                                             | 가용 영역 아이디 목록 입니다. 가용 영역은 AWS Region 마다 다르며, EC2 콘솔 화면에서 확인할 수 있습니다. | list(string)  |  ["apne2-az1", "apne2-az2"] | No |
+| enable_dns_hostnames                            | VPC 에서 DNS 호스트 이름 검색을 활성화 할 것인지 여부입니다.                              | bool | true | No |
+| enable_dns_support                              | VPC 에서 DNS 지원을 활성화 할 것인지 여부입니다.                                     | bool | true | No |
+| enable_nat_gateway                              | NAT 게이트웨이를 생성할 것인지 여부입니다.                                           | bool | false | No |
+| single_nat_gateway                              | 하나의 NAT 게이트웨이를 생성할 것인지 여부입니다.                                       | bool | false | No |
+| one_nat_gateway_per_az                          | 가용 영역별로 NAT 게이트웨이를 생성할 것인지 여부입니다.                                   | bool | false | No |
+| customer_gateways                               | 고객 게이트웨이 맵(BGP ASN 및 게이트웨이의 인터넷 라우팅 가능한 외부 IP 주소)을 정의 합니다.          | map(map(any)) | <pre>customer_gateways = {<br>  IP1 = {<br>    bgp_asn = 65112<br>    ip_address = "1.2.3.4"<br>    device_name = "some_name"<br>  },<br>  IP2 = {<br>    bgp_asn = 65112<br>    ip_address = "5.6.7.8"<br>  }<br>}</pre> | No |
+| enable_vpn_gateway                              | 신규 VPN Gateway 리소스를 생성하여 VPC 에 연결할 것 인지 여부입니다.                      | bool | false | No |
+| vpn_gateway_id                                  | VPC 에 추가 할 VPN 게이트웨이 아이디 입니다.                                       | string | example | No |
+| tags                                            | VPC 및 연관된 리소스에 추가할 tag 속성 입니다.                                      | map(any) | { Project = "startek" } | No |
+| vpc_tags                                        | VPC 리소스에 추가할 tag 속성 입니다.                                            | map(any) | { Name = "my-vpc" } | No |
+| public_acl_tags                                 | Public ACL 리소스에 추가할 tag 속성 입니다.                                     | map(any) | { Key = "my-value-1" } | No |
+| private_acl_tags                                | Private ACL 리소스에 추가할 tag 속성 입니다.                                    | map(any) | { Key = "my-value-1" } | No |
+| intra_acl_tags                                  | 인트라넷 ACL 리소스에 추가할 tag 속성 입니다.                                       | map(any) | { Key = "my-value-1" } | No |
+| database_acl_tags                               | 데이터베이스 ACL 리소스에 추가할 tag 속성 입니다.                                     | map(any) | { Key = "my-value-1" } | No |
+| customer_gateway_tags                           | 커스터머 GW 리소스에 추가할 tag 속성 입니다.                                        | map(any) | { Key = "my-value-1" } | No |
+| vpn_gateway_tags                                | VPN GW 리소스에 추가할 tag 속성 입니다.                                         | map(any) | { Key = "my-value-1" } | No |
+| vpc_flow_log_tags                               | VPC Flow 리소스에 추가할 tag 속성 입니다.                                       | map(any) | { Key = "my-value-1" } | No |
+| manage_default_network_acl                      | 기본 NACL 정책을 적용할지 여부입니다.                                             | bool | false | No |
+| default_network_acl_name                        | 기본 NACL 이름 입니다.                                                     | string | "my-nacl" | No |
+| default_network_acl_tags                        | 기본 NACL 태그 속성 입니다.                                                  | map(any) | { Key = "my-value-1" } | No |
+| public_dedicated_network_acl                    | 공용 서브넷에 대한 전용 네트워크 ACL 및 사용자 지정 규칙을 사용할지 여부 입니다.                    | bool | false | No |
+| private_dedicated_network_acl                   | Private 서브넷에 대한 전용 네트워크 ACL 및 사용자 지정 규칙을 사용할지 여부 입니다.               | bool | false | No |
+| intra_dedicated_network_acl                     | Intranet 서브넷에 대한 전용 네트워크 ACL 및 사용자 지정 규칙을 사용할지 여부 입니다.              | bool | false | No |
+| database_dedicated_network_acl                  | 데이터베이 서브넷에 대한 전용 네트워크 ACL 및 사용자 지정 규칙을 사용할지 여부 입니다.                 | bool | false | No |
+| default_security_group_name                     | VPC 에 포함될 기본 보안 그룹 이름 입니다.                                          | string | "my-default-vpc-sg" | No |
+| default_security_group_ingress                  | 기본 보안 그룹의 Ingress 룰 입니다.                                            | list(map(string)) | <pre>[<br>  {<br>    cidr_blocks = ["172.11.21.0/24"]<br>    description = "SSH"<br>    from_port   = "22"<br>    to_port     = "22"<br>    protocol    = "tcp"<br>  },<br>  {<br>    cidr_blocks = ["172.11.21.0/24"]<br>    description = "TLS"<br>    from_port   = "443"<br>    to_port     = "443"<br>    protocol    = "tcp"<br>  }<br>]</pre> | No |
+| default_security_group_egress                   | 기본 보안 그룹의 Egress 룰 입니다.                                             | list(map(string)) | <pre>[<br>  {<br>    cidr_blocks = "0.0.0.0/0"<br>    description = "Outbound HTTP"<br>    from_port   = "80"<br>    to_port     = "80"<br>    protocol    = "tcp"<br>  },<br>]</pre> | No |
+| enable_flow_log                                 | VPC Flow log 생성 여부입니다.                                              | bool | false | No |
+| flow_log_destination_type                       | VPC Flow Logs 의 데이터가 적재되는 타겟 입니다. (s3, cloud-watch-logs)            | string | "cloud-watch-logs" | No |
+| flow_log_destination_arn                        | VPC Flow Logs 데이터가 적재될 대상 리소스 ARN 입니다. (s3, cloud-watch-logs) | string | - | No |
+| flow_log_format                                 | VPC Flow Logs 의 적재 메시지 포멧입니다.                                       | string | "" | No |
+| flow_log_traffic_type                           | VPC Flow Logs 의 네트워크 전송 트래픽 유형입니다. (ACCEPT, REJECT, ALL)            | string | "ALL" | No |
+| flow_log_max_aggregation_interval               | VPC Flow Logs 의 최대 수집 간격 입니다. | number | 600 | No |
+| flow_log_file_format                            | VPC Flow Logs 의 데이터가 적재되는 파일 포멧입니다.(plain-text, parquet)            | string | "parquet" | No |
+| create_flow_log_cloudwatch_log_group            | VPC Flow Logs용 CloudWatch 로그 그룹 생성 여부입니다.                           | bool | false | No |
+| create_flow_log_cloudwatch_iam_role             | VPC Flow Logs용 CloudWatch IAM 롤 생성 여부입니다.                           | bool | false | No |
+| flow_log_cloudwatch_iam_role_arn                | VPC Flow Logs용 CloudWatch IAM 롤의 ARN 입니다. | string | - | No |
+| flow_log_cloudwatch_log_group_name_prefix       | VPC Flow Logs 용 Cloud CloudWatch 로그 그룹 경로 접두어 입니다. | string | "/aws/vpc-flow-log/" | No |
 | flow_log_cloudwatch_log_group_retention_in_days | VPC Flow Logs 용 Cloud CloudWatch 로그 그룹의 데이터 보관일 수 입니다. | number | 90 | No |
-| flow_log_cloudwatch_log_group_kms_key_id | VPC Flow Logs 용 Cloud CloudWatch 로그 그룹 적재에 사용할 KMS 암호화 키 입니다. | string | - | No |
-| flow_log_max_aggregation_interval | VPC Flow Logs 의 최대 수집 간격 입니다. | number | 600 | No |
-| create_private_domain_hostzone | Route53 private host-zone 에 private domain 레코드를 생성할지 여부입니다.. | bool | false | No |
-| context | 프로젝트에 관한 리소스를 생성 및 관리에 참조 되는 정보로 표준화된 네이밍 정책 및 리소스를 위한 속성 정보를 포함하며 이를 통해 데이터 소스 참조에도 활용됩니다. | object({}) | - | Yes |
-| _________________________________ | ____________________________________________________ | _ | _ | _ |
+| flow_log_cloudwatch_log_group_kms_key_id        | VPC Flow Logs 용 Cloud CloudWatch 로그 그룹 적재에 사용할 KMS 암호화 키 입니다. | string | - | No |
+| create_private_domain_hostzone                  | Route53 private host-zone 에 private domain 레코드를 생성할지 여부입니다.. | bool | false | No |
+| context                                         | 프로젝트에 관한 리소스를 생성 및 관리에 참조 되는 정보로 표준화된 네이밍 정책 및 리소스를 위한 속성 정보를 포함하며 이를 통해 데이터 소스 참조에도 활용됩니다. | object({}) | - | Yes |
+| _________________________________               | ____________________________________________________ | _ | _ | _ |
 
 
 ## Outputs

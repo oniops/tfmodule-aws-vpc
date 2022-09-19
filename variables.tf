@@ -2859,10 +2859,10 @@ variable "flow_log_traffic_type" {
 variable "flow_log_destination_type" {
   description = "Type of flow log destination. Can be s3 or cloud-watch-logs."
   type        = string
-  default     = "cloud-watch-logs"
+  default     = "s3"
 }
 
-variable "flow_log_log_format" {
+variable "flow_log_format" {
   description = "The fields to include in the flow log record, in the order in which they should appear."
   type        = string
   default     = null
@@ -2872,6 +2872,29 @@ variable "flow_log_destination_arn" {
   description = "The ARN of the CloudWatch log group or S3 bucket where VPC Flow Logs will be pushed. If this ARN is a S3 bucket the appropriate permissions need to be set on that bucket's policy. When create_flow_log_cloudwatch_log_group is set to false this argument must be provided."
   type        = string
   default     = ""
+}
+
+variable "flow_log_file_format" {
+  description = "(Optional) The format for the flow log. Valid values: `plain-text`, `parquet`."
+  type        = string
+  default     = "parquet"
+  validation {
+    condition = can(regex("^(plain-text|parquet)$",
+      var.flow_log_file_format))
+    error_message = "ERROR valid values: plain-text, parquet."
+  }
+}
+
+variable "flow_log_hive_compatible_partitions" {
+  description = "(Optional) Indicates whether to use Hive-compatible prefixes for flow logs stored in Amazon S3."
+  type        = bool
+  default     = false
+}
+
+variable "flow_log_per_hour_partition" {
+  description = "(Optional) Indicates whether to partition the flow log per hour. This reduces the cost and response time for queries."
+  type        = bool
+  default     = false
 }
 
 variable "flow_log_cloudwatch_iam_role_arn" {
