@@ -71,7 +71,7 @@ resource "aws_default_security_group" "this" {
 
   tags = merge(local.tags, var.default_security_group_tags,
     {
-      Name = var.default_security_group_name == null ? format("%s-default-sg", local.name_prefix) : format("%s", var.default_security_group_name)
+      Name = var.default_security_group_name == null ? format("%s-vpc-default-sg", local.name_prefix) : format("%s", var.default_security_group_name)
     },
   )
 }
