@@ -24,19 +24,19 @@ module "vpc" {
   source = "git::https://code.bespinglobal.com/scm/op/tfmodule-aws-vpc.git"
 
   context = module.ctx.context
+
   cidr    = "171.2.0.0/16"
-
   azs = [ data.aws_availability_zones.this.zone_ids[0], data.aws_availability_zones.this.zone_ids[1] ]
-
-  public_subnet_names  = ["pub-a1", "pub-b1"]
-  public_subnets       = ["171.2.11.0/24", "171.2.12.0/24"]
-  public_subnet_suffix = "pub"
 
   enable_nat_gateway = true
   single_nat_gateway = true
 
-  private_subnet_names = ["pri-a1", "pri-b1"]
+  public_subnets       = ["171.2.11.0/24", "171.2.12.0/24"]
+  public_subnet_names  = ["pub-a1", "pub-b1"]
+  public_subnet_suffix = "pub"
+
   private_subnets      = ["171.2.31.0/24", "171.2.32.0/24"]
+  private_subnet_names = ["pri-a1", "pri-b1"]
 
   depends_on = [module.ctx]
 }
@@ -139,17 +139,18 @@ module "vpc" {
 
 ## VPN Gateway 를 통한 외부 네트워크간 연결
 온-프레미스 또는 다른 CSP 벤더의 VPN 게이트웨이를 VPC 에 연결 할 수 있습니다.
+
+- VPC 모듈을 통한 VGW 구성 예시 
 ```
-resource "aws_vpn_gateway" "main" {
-  vpc_id = "my-vpc"
-  tags = {}
-}
+  enable_vpn_gateway                 = true     # Virtual Private Gateway (VGW) 구성 및 VPC 와 연결  
+  propagate_private_route_tables_vgw = true     # Public  라우팅 테이블과 연결 
+  propagate_public_route_tables_vgw =  true     # Private 라우팅 테이블과 연결
+```
 
-resource "aws_vpn_gateway_route_propagation" "main" {
-  route_table_id = "rtb-0052b18f3b766dd5f" # VPC 의 라우팅 테이블 아이디
-  vpn_gateway_id = aws_vpn_gateway.main.id
-}
+- [tfmodule-aws-vpn-gateway](https://code.bespinglobal.com/scm/op/tfmodule-aws-vpn-gateway.git) 모듈을 통해 Customer Gateway (CGW)를 및 VPN 연결을 구성하는 예시 
 
+- Customer Gateway (CGW) 및 VPN 연결을 직접 구성 하는 예시  
+```
 resource "aws_customer_gateway" "azure" {
   bgp_asn    = 65000
   ip_address = "211.12.31.33" # Azure 의 public 게이트웨이 아이피
