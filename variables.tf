@@ -287,6 +287,11 @@ variable "one_nat_gateway_per_az" {
   default     = false
 }
 
+variable "enable_intranet_nat_gateway" {
+  type        = bool
+  default     = false
+}
+
 variable "reuse_nat_ips" {
   description = "Should be true if you don't want EIPs to be created for your NAT Gateways and will instead pass them in via the 'external_nat_ip_ids' variable"
   type        = bool
