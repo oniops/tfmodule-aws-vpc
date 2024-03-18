@@ -711,11 +711,8 @@ resource "aws_route" "private_ipv6_egress" {
   egress_only_gateway_id      = element(aws_egress_only_internet_gateway.this.*.id, 0)
 }
 
-
-
-###
 resource "aws_route" "intranet_nat_gateway" {
-  count = var.create_vpc && var.enable_nat_gateway && var.enable_intranet_nat_gateway ? local.nat_gateway_count : 0
+  count = var.create_vpc && var.enable_nat_gateway && var.add_route_nat_gateway_to_intranet ? local.nat_gateway_count : 0
 
   route_table_id         = element(aws_route_table.intra.*.id, count.index)
   destination_cidr_block = "0.0.0.0/0"
@@ -727,15 +724,11 @@ resource "aws_route" "intranet_nat_gateway" {
 }
 
 resource "aws_route" "intranet_ipv6_egress" {
-  count = var.create_vpc && var.create_egress_only_igw && var.enable_ipv6 && var.enable_intranet_nat_gateway ? length(var.intra_subnets) : 0
+  count = var.create_vpc && var.create_egress_only_igw && var.enable_ipv6 && var.add_route_nat_gateway_to_intranet ? length(var.intra_subnets) : 0
   route_table_id              = element(aws_route_table.private.*.id, count.index)
   destination_ipv6_cidr_block = "::/0"
   egress_only_gateway_id      = element(aws_egress_only_internet_gateway.this.*.id, 0)
 }
-
-
-###
-
 
 ##########################
 # Route table association

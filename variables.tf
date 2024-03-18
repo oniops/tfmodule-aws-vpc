@@ -287,7 +287,7 @@ variable "one_nat_gateway_per_az" {
   default     = false
 }
 
-variable "enable_intranet_nat_gateway" {
+variable "add_route_nat_gateway_to_intranet" {
   type        = bool
   default     = false
 }
