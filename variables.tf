@@ -2875,7 +2875,7 @@ variable "flow_log_per_hour_partition" {
 variable "flow_log_cloudwatch_iam_role_arn" {
   description = "The ARN for the IAM role that's used to post flow logs to a CloudWatch Logs log group. When flow_log_destination_arn is set to ARN of Cloudwatch Logs, this argument needs to be provided."
   type        = string
-  default     = ""
+  default     = null
 }
 
 variable "flow_log_cloudwatch_log_group_name_prefix" {
@@ -2897,9 +2897,12 @@ variable "flow_log_cloudwatch_log_group_kms_key_id" {
 }
 
 variable "flow_log_max_aggregation_interval" {
-  description = "The maximum interval of time during which a flow of packets is captured and aggregated into a flow log record. Valid Values: `60` seconds or `600` seconds."
   type        = number
   default     = 600
+  description = <<EOF
+The maximum interval of time during which a flow of packets is captured and aggregated into a flow log record. Valid Values: `60` seconds or `600` seconds.
+When transit_gateway_id or transit_gateway_attachment_id is specified, max_aggregation_interval must be 60 seconds (1 minute).
+EOF
 }
 
 variable "create_igw" {
