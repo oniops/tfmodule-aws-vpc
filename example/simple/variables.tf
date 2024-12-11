@@ -9,6 +9,8 @@ variable "context" {
     cost_center             = number # Cost Center
     domain                  = string # Team name of Devops Transformation
     pri_domain              = string # Team name of Devops Transformation
+    customer   = string
+    department   = string
   })
   default = {
     aws_profile             = null
@@ -20,5 +22,7 @@ variable "context" {
     cost_center             = null
     domain                  = null
     pri_domain              = null
+    customer              = null
+    department              = null
   }
 }

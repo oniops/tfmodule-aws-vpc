@@ -166,6 +166,16 @@ variable "private_subnet_names" {
   default     = []
 }
 
+variable "private_subnet_map_tags" {
+  type        = list(map(string))
+  default     = []
+  description = <<EOF
+A list of private subnet collection tags"
+
+  private_subnet_map_tags = [ {AppNodeName = "app-node-01"}, {AppNodeName = "app-node-02"} ]
+EOF
+}
+
 variable "database_subnets" {
   description = "A list of database subnets"
   type        = list(string)

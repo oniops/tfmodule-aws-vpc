@@ -20,6 +20,14 @@ module "vpc" {
 
   private_subnet_names = ["pri-a1", "pri-b1"]
   private_subnets      = ["171.2.31.0/24", "171.2.32.0/24"]
+  private_subnet_map_tags = [
+    {
+      NodeTopologyName = "Test_01"
+    },
+    {
+      NodeTopologyName = "Test_02"
+    }
+  ]
 
   depends_on = [module.ctx]
 }
