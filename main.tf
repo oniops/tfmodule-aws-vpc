@@ -328,7 +328,7 @@ resource "aws_subnet" "private" {
   tags = merge(
     local.tags,
     var.private_subnet_tags,
-    element(var.private_subnet_map_tags, count.index),
+    length(var.private_subnet_map_tags) > 1 ? element(var.private_subnet_map_tags, count.index) : {},
     { Name = format("%s-%s-sn", local.name_prefix, element(var.private_subnet_names, count.index)) },
   )
 }
