@@ -262,9 +262,14 @@ variable "create_database_nat_gateway_route" {
 }
 
 variable "azs" {
-  description = "A list of availability zones names or ids in the region"
   type        = list(string)
   default     = []
+  description =<<-EOF
+A list of availability zones names or ids in the region.
+
+CLI)
+  aws ec2 describe-availability-zones --query "AvailabilityZones[*].[ZoneName,ZoneId]" --output table --region us-east-1
+EOF
 }
 
 variable "enable_dns_hostnames" {
