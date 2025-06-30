@@ -795,7 +795,7 @@ resource "aws_vpn_gateway" "this" {
   tags = merge(
     local.tags,
     var.vpn_gateway_tags,
-    { Name = format("%s-vpn-gw", local.name_prefix) },
+    { Name = "${local.name_prefix}-vgw" },
   )
 }
 
