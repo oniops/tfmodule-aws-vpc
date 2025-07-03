@@ -1,7 +1,7 @@
 locals {
   name        = var.context.project
   name_prefix = var.context.name_prefix
-  name_suffix = format("%s%s", var.context.region_alias, var.context.env_alias)
+  # name_suffix = format("%s%s", var.context.region_alias, var.context.env_alias)
   vpc_name    = format("%s-vpc", local.name_prefix)
 
   vpc_tags = {
@@ -35,7 +35,6 @@ locals {
   )
 
 }
-
 
 ######
 # VPC
@@ -218,7 +217,6 @@ resource "aws_route_table" "private" {
   )
 }
 
-
 #################
 # Database routes
 #################
@@ -276,7 +274,7 @@ resource "aws_route" "database_ipv6_egress" {
 # Intra routes
 #################
 resource "aws_route_table" "intra" {
-  count = var.create_vpc && length(var.intra_subnets) > 0 ? 1 : 0
+  count = var.create_vpc && length(var.intra_subnets) > 0 ? local.nat_gateway_count : 0
 
   vpc_id = local.vpc_id
 
@@ -311,7 +309,6 @@ resource "aws_subnet" "public" {
   )
 }
 
-
 #################
 # Private subnet
 #################
@@ -328,7 +325,7 @@ resource "aws_subnet" "private" {
   tags = merge(
     local.tags,
     var.private_subnet_tags,
-    length(var.private_subnet_map_tags) > 1 ? element(var.private_subnet_map_tags, count.index) : {},
+      length(var.private_subnet_map_tags) > 1 ? element(var.private_subnet_map_tags, count.index) : {},
     { Name = format("%s-%s-sn", local.name_prefix, element(var.private_subnet_names, count.index)) },
   )
 }
@@ -362,7 +359,6 @@ resource "aws_db_subnet_group" "database" {
 
   tags = merge(local.tags, var.database_subnet_group_tags, { Name = format("%s-data-sng", local.name_prefix) }, )
 }
-
 
 #####################################################
 # intra subnets - private subnet without NAT gateway
@@ -738,7 +734,7 @@ resource "aws_route_table_association" "private" {
   count = var.create_vpc && length(var.private_subnets) > 0 ? length(var.private_subnets) : 0
 
   subnet_id      = element(aws_subnet.private.*.id, count.index)
-  route_table_id = element( aws_route_table.private.*.id, var.single_nat_gateway ? 0 : count.index, )
+  route_table_id = element(aws_route_table.private.*.id, var.single_nat_gateway ? 0 : count.index, )
 }
 
 resource "aws_route_table_association" "database" {
@@ -755,7 +751,7 @@ resource "aws_route_table_association" "intra" {
   count = var.create_vpc && length(var.intra_subnets) > 0 ? length(var.intra_subnets) : 0
 
   subnet_id      = element(aws_subnet.intra.*.id, count.index)
-  route_table_id = element(aws_route_table.intra.*.id, 0)
+  route_table_id = element( aws_route_table.intra.*.id, var.single_nat_gateway ? 0 : count.index, )
 }
 
 resource "aws_route_table_association" "public" {
