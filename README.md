@@ -6,7 +6,7 @@ AWS VPC 서비스를 생성 하는 테라폼 모듈 입니다.
 
 ```
 module "ctx" {
-  source = "git::https://code.bespinglobal.com/scm/op/tfmodule-context.git"
+  source = "git::https://github.com/oniops/tfmodule-context.git"
   context = {
     aws_profile = "terran"
     region      = "ap-northeast-2"
@@ -21,7 +21,7 @@ module "ctx" {
 }
 
 module "vpc" {
-  source = "git::https://code.bespinglobal.com/scm/op/tfmodule-aws-vpc.git"
+  source = "git::https://github.com/oniops/tfmodule-aws-vpc.git"
 
   context = module.ctx.context
 
@@ -147,7 +147,7 @@ module "vpc" {
   propagate_public_route_tables_vgw =  true     # Private 라우팅 테이블과 연결
 ```
 
-- [tfmodule-aws-vpn-gateway](https://code.bespinglobal.com/scm/op/tfmodule-aws-vpn-gateway.git) 모듈을 통해 Customer Gateway (CGW)를 및 VPN 연결을 구성하는 예시 
+- [tfmodule-aws-vpn-gateway](https://github.com/oniops/tfmodule-aws-vpn-gateway) 모듈을 통해 Customer Gateway (CGW)를 및 VPN 연결을 구성하는 예시 
 
 - Customer Gateway (CGW) 및 VPN 연결을 직접 구성 하는 예시  
 ```
