@@ -1,3 +1,6 @@
+# Version constraints. The lower bound of required_version is a requirement (POLICIES 9.3):
+# validation blocks may only reference their own variable below Terraform 1.9, so every
+# check that spans two inputs is a precondition (POLICIES 6.2).
 terraform {
   required_version = ">= 1.5.7"
 
@@ -7,5 +10,4 @@ terraform {
       version = ">= 6.0, < 7.0"
     }
   }
-
 }
