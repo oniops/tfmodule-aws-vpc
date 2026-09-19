@@ -1,0 +1,415 @@
+# ARCHITECTURE — 어떤 구조로 만족시키는가
+
+> **문서 종류:** Terraform 모듈 아키텍처 명세
+> **모듈:** `tfmodule-aws-vpc`
+> **답하는 질문:** 이 모듈은 어떤 모델로 VPC를 표현하는가. 호출자는 무엇을 입력하고 무엇을 돌려받는가.
+> **함께 읽기:** [REQUIREMENTS](REQUIREMENTS.md) · [POLICIES](POLICIES.md) · [DECISIONS](DECISIONS.md)
+
+REQUIREMENTS가 정한 요구사항을 **어떤 구조로** 만족시키는지 정의한다. 이 문서는 모델(1~5절)과 계약(6~11절) 두 부분이다. 모델은 모듈이 세상을 바라보는 방식이고, 계약은 호출자와 주고받는 인터페이스다.
+
+한 문장으로 요약하면 이렇다.
+
+> **VPC 하나에 워크로드 스택을 수평으로 쌓고, 스택마다 전용 Multi-AZ 서브넷 집합으로 격리한다. 서브넷의 성격은 그 서브넷이 가리키는 Route Table의 기본 경로가 정하고, 계층은 호출자가 정한 이름이 나타낸다.**
+
+---
+
+## 1. 전체 구조
+
+VPC는 여러 워크로드 스택을 수평적으로 수용하고, 각 스택은 독립적인 Multi-AZ Subnet Set으로 수직 격리한다. Toolchain, Observability 같은 Shared Service도 같은 구조의 스택이다(2.2절, 5.1절).
+
+```text
+Platform VPC
+│
+├─ Shared Public Network
+│  ├─ Public Subnet / AZ-A, AZ-B, ...
+│  └─ NAT Gateway, NAT 인스턴스용 ENI·Security Group, Internet-facing LB
+│
+├─ Workload Stack A            (서브넷 = 이름 + 배치 AZ + CIDR + 연결할 Route Table)
+│  └─ Multi-AZ Subnet Set
+├─ Workload Stack B
+│  └─ Multi-AZ Subnet Set
+├─ Workload Stack N            (Toolchain, Observability 등 Shared Service 스택도 같은 구조)
+│  └─ Multi-AZ Subnet Set
+│
+└─ Shared Network Services
+   ├─ Route Table, Internet Gateway, Egress-only IGW
+   ├─ VPC Endpoint (Gateway, Interface + VPC Endpoint Subnet)
+   ├─ Private DNS, DHCP Options
+   └─ Flow Logs
+```
+
+특정 서비스명이나 업무 도메인에 종속되지 않아야 하며, 임의의 워크로드 스택을 선언형 입력만으로 추가·제거할 수 있어야 한다.
+
+---
+
+## 2. 스택과 서브넷
+
+### 2.1 스택 모델
+
+- 각 워크로드는 다른 워크로드와 공유하지 않는 전용 Subnet Set을 가져야 한다.
+- VPC는 최소 2개, 권장 3개 AZ에 배치한다. AZ는 서브넷마다 그 서브넷 항목의 `az` 필드로 선언한다. 검사는 REQUIREMENTS 6.2절이 정의한다.
+- 워크로드 스택의 추가·제거는 그 스택의 리소스만 생성·삭제하고 다른 스택과 Shared Network 리소스에 변경을 만들지 않는다. 수명주기 원칙은 POLICIES 7절이 정의한다.
+- Secondary VPC CIDR 추가를 지원하여 향후 IP 확장에 대응할 수 있어야 한다.
+
+### 2.2 서브넷 모델
+
+서브넷은 스택 안에서 이름을 키로 하는 평면 Map으로 선언하며, 한 항목이 서브넷 하나다. 항목에는 배치 AZ(`az`), CIDR(`cidr`), 연결할 Route Table(`route_table`)이 모두 들어 있어 그 한 줄만 읽어도 서브넷이 어디에 놓이고 어디로 나가는지 알 수 있다. 서브넷 객체의 구조는 2.3절이, 리소스 키 체계는 6절이 정의한다.
+
+- 모듈은 스택 서브넷에 Role이나 계층 구분을 두지 않는다. 서브넷의 **성격은 그 서브넷이 가리키는 Route Table의 `0.0.0.0/0` 경로**가 정하고(3절), **계층은 호출자가 정한 서브넷 이름**으로 나타낸다. `public`·`private`·`database`·`intra` 같은 Role 키, Role별 허용 경로 검사, Role별 필수 여부는 두지 않는다.
+- 아래 표는 Route Table 성격별 권장 용도이며 모듈이 검사하는 제약이 아니다. 어느 스택 서브넷이든 선언된 어느 Route Table이든 가리킬 수 있다.
+
+| 연결한 RT의 `0.0.0.0/0` | RT 성격 | 권장 용도 |
+| --- | --- | --- |
+| `igw` | Public | Internet-facing LB, 공인 IP를 직접 받는 워크로드. 스택 서브넷이 이 RT를 가리키면 그것이 스택 전용 Public Subnet이다. NAT Gateway는 Shared Public Subnet에만 배치한다(4절) |
+| NAT(Gateway 또는 인스턴스 ENI) | Private | 워크로드 노드, Pod, Internal LB. OS 패치 등 외부 접근이 필요한 데이터 계층 |
+| 경로 없음 | Isolated | 관리형 DB, ElastiCache 등 데이터 계층(권장), 내부 전용 서비스, VPC Endpoint Subnet. 패치는 S3·SSM Endpoint를 우선한다 |
+
+- 경로 리소스는 Route Table 단위다. 서브넷을 하나 추가하면 그 서브넷과 Route Table Association만 생기고 Route Table·경로·다른 서브넷의 리소스는 변하지 않는다. NACL은 서브넷 단위가 아니라 스택당 1개다(REQUIREMENTS 6.8절).
+- 스택이 VPC의 모든 AZ를 채우도록 강제하지 않는다. 스택 서브넷의 개수 요건은 RSC-SUB-10이 정의한다.
+- 스택의 성격(워크로드, Toolchain, Observability, EKS 등)을 구분하는 입력(`type` 등)은 두지 않으며 태그로만 구별한다. 성격을 나타내는 태그(예: `ServiceRole`)와 EKS 등 외부 컨트롤러가 요구하는 태그는 모듈이 만들지 않고 호출자가 스택 `tags` 또는 서브넷 `tags`에 직접 정의한다. 11절은 EKS 스택에 필요한 태그 목록을 안내할 뿐 새 라우팅 규칙을 정의하지 않는다. 이 원칙은 이 항목이 유일한 정의다.
+- 데이터 계층·격리 계층의 인바운드 제한은 스택 NACL 입력(REQUIREMENTS 6.8절)과 워크로드 Security Group으로 구성한다. 모듈이 기본 룰을 강제하지 않는다.
+- Shared Network의 `shared_public`과 `vpc_endpoint_subnets`는 스택 서브넷이 아니며, 각각 RSC-PUB-04, RSC-VPCE-07의 Route Table 제약을 받는다. 스택 서브넷에는 그런 제약이 없다.
+
+### 2.3 서브넷 객체 구조
+
+`shared_public.subnets`, `vpc_endpoint_subnets`, 스택 `subnets`는 모두 **서브넷 이름을 키로 하는 아래 객체의 Map**이다. 한 항목이 서브넷 하나이며, 그 항목만 읽어도 배치 AZ·CIDR·연결할 Route Table을 알 수 있다. 이 절이 서브넷 객체 구조의 유일한 정의다.
+
+| 필드 | 타입 | 내용 |
+| --- | --- | --- |
+| (키) | 서브넷 이름 | 리소스 키의 마지막 마디이자 `Name` 태그의 가운데(2.1·7절). VPC 전체에서 유일해야 한다 |
+| `az` | `string`, 필수 | 배치 AZ의 AZ ID. `availability_zone_id`에 그대로 적용한다 |
+| `cidr` | `string`, 필수 | `cidr_block`에 그대로 적용한다 |
+| `route_table` | `string`, 필수 | 이 서브넷을 연결할 `route_tables` 키. `aws_route_table_association`의 `route_table_id`가 된다 |
+| `ipv6_index` | `number`, 선택, 기본 `null` | IPv6 /64 인덱스(`0`~`255`). `enable_ipv6 = true`일 때만 허용하며 `false`인데 값이 있으면 plan 실패(RSC-VPC-05). `null`이면 IPv6 CIDR을 할당하지 않는다 |
+| `tags` | `map(string)`, 선택, 기본 `{}` | 이 서브넷에만 적용하는 커스텀 태그. EKS 컨트롤러 태그처럼 일부 서브넷에만 필요한 태그를 여기 둔다(11.2절) |
+
+- AZ는 AZ ID(`apne2-az1`)로 받는다. AZ ID는 계정마다 다른 AZ 이름과 달리 물리 AZ를 가리키므로 계정 간 배치를 일관되게 한다. 예외는 AWS 리소스 인자가 AZ 이름만 받는 경우(VGW의 `availability_zone`)에 한하며, 그 필드는 AZ 이름을 받고 변수 설명에 AZ 이름임을 명시한다. 값 형식 검사는 RSC-AZ-01이다.
+- 스택 서브넷에는 Role이나 계층 구분이 없다(2.2절). 모듈은 스택 서브넷의 `route_table` 값에 제약을 두지 않으며, `shared_public`과 `vpc_endpoint_subnets`만 각각 RSC-PUB-04, RSC-VPCE-07의 제약을 받는다.
+
+---
+
+## 3. 라우팅
+
+- Route Table은 호출자가 `route_tables` 입력에 **명시적으로 선언**하고, 모든 서브넷 항목(Shared Public·VPC Endpoint 포함)은 `route_table` 필드로 Route Table 키를 적는다. 모듈은 모드나 규칙으로 Route Table을 도출하지 않고 스스로 만드는 Route Table도 없으며, 입력 파일만 읽어도 어느 서브넷이 어느 경로를 갖는지 드러나야 한다. Public Subnet용 IGW Route Table도 호출자가 선언한다.
+- Route Table은 **목적지 → 대상 표**다. `routes`의 키는 목적지 CIDR(IPv4 또는 IPv6)이고 값은 대상 하나를 가리키는 객체다. 대상은 이 모듈이 만드는 게이트웨이(`gateway`: `igw`, `eigw`, `vgw`), `nat_gateways`의 키(`nat_gateway`), `eni_interfaces`의 키(`eni`), 호출자가 만든 ENI(`network_interface_id`) 중 정확히 하나다. 모듈이 만드는 대상은 키로, 호출자가 만든 대상은 ID로 가리킨다. 경로가 없는 Route Table은 `routes`를 비운다. `local` 경로는 AWS가 VPC CIDR과 보조 CIDR마다 자동으로 두므로 선언 대상이 아니다.
+- IPv6 기본 경로(Egress-only IGW)는 호출자가 `routes`에 `::/0` 같은 IPv6 목적지로 직접 적으며 모듈이 IPv4 경로에서 도출하지 않는다. 생성 조건은 RSC-RT-05가 정의한다.
+- 참조 방향 원칙은 POLICIES 2.1절을 따른다. 이 모듈에서는 서브넷이 Route Table을, 경로가 NAT나 ENI를, NAT와 ENI가 서브넷을 가리키며, 상위가 하위를 나열하는 예외는 DB·ElastiCache Subnet Group의 멤버뿐이다.
+- Route Table과 NAT는 항상 Shared Network 리소스다. 스택 전용 Route Table이라는 개념은 두지 않으며 여러 스택의 서브넷이 같은 Route Table을 가리킬 수 있다. 반대로 한 스택만 가리키는 Route Table을 선언해 그 스택에만 경로를 두는 것도 가능하며, 같은 NAT를 참조하면 비용이 늘지 않는다. 어떤 서브넷도 가리키지 않는 Route Table도 선언된 대로 만든다(RSC-RT-03).
+- Gateway Endpoint 연결은 `vpc_endpoints.gateway`가 정하고 모든 Route Table에 자동 적용된다(RSC-RT-06). VGW 경로 전파는 Route Table의 `propagate_vgw`로 켠다. VPC Peering·Transit Gateway 경로는 연결을 만드는 전용 모듈의 몫이며 이 모듈의 경로 대상에 두지 않는다(5.2절).
+- Terraform Resource Address는 `for_each` 기반의 안정적인 Key를 사용해야 한다. 리소스별 키 체계는 6절이 정의한다.
+- 경로 객체의 필드 제약, IPv6 경로, Association 등 리소스 수준 요구사항은 REQUIREMENTS 6.7절이 정의한다.
+
+---
+
+## 4. NAT
+
+- NAT Gateway는 `nat_gateways` 입력에 선언한 만큼 만든다. 항목마다 NAT를 배치할 Shared Public Subnet을 `public_subnet`으로 적으며, 입력이 비어 있으면 NAT는 0개다. 여러 Route Table이 한 NAT를 참조할 수 있어, 경로만 다른 Route Table을 추가해도 NAT가 늘지 않는다.
+- NAT는 Shared Network 리소스다(3절). 스택 전용 Public Subnet에는 배치하지 않는다.
+- Production 권장 구성은 사용하는 AZ마다 NAT 1개이며, 각 서브넷은 같은 AZ의 NAT를 가리키는 Route Table에 연결한다. 이 구성에서는 한 AZ의 NAT 장애가 다른 AZ에 영향을 주지 않는다. 비용 최소 구성으로 NAT 1개를 여러 AZ가 공유할 수 있으나 Cross-AZ 데이터 전송 비용과 AZ 장애 영향이 따른다.
+- NAT Gateway 대신 NAT 인스턴스·어플라이언스를 쓰는 구성도 지원한다. 그때는 `nat_gateways`를 비우고 Route Table의 기본 경로가 ENI를 가리킨다(3절). ENI는 `eni_interfaces` 입력으로 이 모듈이 서브넷에 만들거나(REQUIREMENTS 6.6절), 호출자가 만들어 ID를 넘긴다. 모듈이 만들면 인스턴스를 교체해도 경로 대상과 사설 IP, Security Group이 그대로 남는다. ENI에 붙일 SG도 `security_groups` 입력으로 모듈이 만들 수 있으며 룰은 호출자가 붙인다(5.1절). 인스턴스 자체(AMI, 인스턴스 타입, EIP)와 ENI를 인스턴스에 붙이는 일은 어느 경우든 이 모듈 범위 밖이다.
+- NAT의 키·이름, `public_subnet` 제약, EIP 재사용, Cross-AZ 경고 표기 등 리소스 수준 요구사항은 REQUIREMENTS 6.5절이 정의한다.
+
+---
+
+## 5. 공유 서비스와 외부 연결
+
+### 5.1 Shared Service Private Access
+
+- Toolchain, Observability 같은 Shared Service Stack은 `stack_subnets`의 스택으로 정의한다. 전용 서브넷을 가지며 같은 VPC의 다른 워크로드와 Private IP, Internal LB, Private DNS로 통신한다. Public IP나 Internet Gateway를 필수로 요구하지 않는다.
+- 이 모듈의 구현 범위는 스택별 서브넷 격리, 라우팅, 스택 NACL 입력(REQUIREMENTS 6.8절)까지다. 포트 수준의 접근 제어는 워크로드 모듈의 책임이며, 이 모듈은 접근 정책을 위한 별도 입력을 두지 않는다.
+- 예외는 이 모듈이 만드는 ENI에 붙일 Security Group이다. `security_groups` 입력으로 SG와 그 인바운드·아웃바운드 룰을 선언형으로 만들며(REQUIREMENTS 6.6절), 룰은 인라인 블록이 아니라 독립 룰 리소스로 만들어 호출자가 같은 SG에 룰을 더해도 이 모듈의 plan이 흔들리지 않는다(RSC-SG-03). 모듈은 기본 룰 골격을 강제하지 않고 호출자가 적은 룰만 만든다. 워크로드 SG는 여전히 워크로드 모듈이 만들며, Endpoint 전용 SG(RSC-VPCE-04)는 모듈이 룰까지 정하는 또 다른 예외다.
+- 호출자가 스택 NACL과 Security Group을 설계할 때 참고할 접근 정책 예시는 README의 "Shared Service 접근 정책 예시" 절에 둔다. 모듈 요구사항이 아니다.
+
+### 5.2 VPC Peering
+
+VPC Peering은 이 모듈 범위 밖이다. Peering 연결, 수락, Peering 경로는 별도 모듈 [tfmodule-aws-vpc-peer](https://github.com/oniops/tfmodule-aws-vpc-peer/blob/main/README.md)로 구성한다. 이 절이 Peering 관련 서술의 유일한 정의다.
+
+- 이 모듈은 Peering 입력을 두지 않으며 Peering 리소스와 경로를 만들지 않는다.
+- Peering 모듈이 필요로 하는 값은 이 모듈의 출력 `vpc_id`, `vpc_cidr_block`, `route_table_ids`(9절)로 전달한다. Peering 경로를 추가할 Route Table은 호출자가 `route_table_ids`에서 키로 골라 넘긴다.
+- Peering 모듈이 이 모듈의 Route Table에 경로를 추가해도 이 모듈의 plan에 변경이 생기지 않아야 한다. 이를 위해 모든 경로는 `aws_route` 리소스로 만들고 `aws_route_table`의 인라인 `route` 블록을 쓰지 않는다(RSC-RT-02).
+- Peering 대상 리전·계정, 개수, Transitive Routing 등의 제약은 Peering 모듈의 README를 따른다.
+
+### 5.3 VPN Gateway
+
+- 온프레미스 등 외부 네트워크와의 Site-to-Site VPN 연결을 위해 VGW 1개와 여러 Customer Gateway를 선언형 입력으로 지원해야 한다.
+- VGW의 경로 전파는 각 Route Table의 `propagate_vgw`가 켠 Route Table에만 적용하며, VPN Connection 자체는 모듈 범위 밖이다. 리소스 수준 요구사항은 REQUIREMENTS 6.11절이다.
+
+---
+
+## 6. 리소스 키 체계
+
+3절의 `for_each` 기반 안정 키를 모든 리소스에 확장한다. 키는 호출자가 입력에서 정한 이름으로만 구성하며 목록 순서·인덱스·AZ에서 파생하지 않는다. 서브넷·Route Table·NAT의 이름은 호출자가 정하고 모듈은 접두어와 유형 접미어만 붙인다(7절).
+
+| 리소스 | 키 형식 | 예시 |
+| --- | --- | --- |
+| Shared Public Subnet | `shared-network/public/<name>` | `shared-network/public/pub-a1` |
+| VPC Endpoint Subnet (선택) | `shared-network/vpce/<name>` | `shared-network/vpce/vpce-a1` |
+| Stack Subnet (스택 전용 Public 포함) | `<stack>/<name>` | `web/app-a1`, `web/data-a1`, `web/web-pub-a1` |
+| Route Table | `<rt_key>` (`route_tables` 키) | `pub`, `pri-a1` |
+| NAT Gateway, EIP | `<nat_key>` (`nat_gateways`의 키) | `a1` |
+| Network Interface | `<eni_key>` (`eni_interfaces`의 키) | `natsvc-a1` |
+| Security Group | `<sg_key>` (`security_groups`의 키) | `nat-appliance` |
+| Security Group Rule | `<sg_key>/<direction>/<rule_name>` | `nat-appliance/egress/https` |
+| Route | `<rt_key>/<destination>` | `pri-a1/0.0.0.0/0` |
+| Route Table Association | Subnet 키와 동일 | `web/app-a1` |
+| Network ACL | `<stack>` 또는 `shared-network/public` | `web` |
+| Network ACL Rule | `<nacl_key>/<direction>/<rule_name>` | `web/ingress/allow-app-tier` |
+| VPC Endpoint | `<service>` (Gateway는 `s3`, `dynamodb`) | `ecr.api` |
+| Gateway Endpoint RT 연결 | `<service>/<rt_key>` | `s3/pri-a1` |
+| Flow Log | `<destination_key>` (`flow_log.destinations`의 키) | `s3`, `cloudwatch` |
+| Customer Gateway | `<cgw_key>` | `hq-fw-1` |
+| VGW Route Propagation | `<rt_key>` (`propagate_vgw = true`인 Route Table의 키) | `pri-a1` |
+| VGW Attachment (`vpn_gateway.existing_id` 지정 시) | 단일 | — |
+| Secondary CIDR | `<cidr>` | `100.64.0.0/16` |
+| DB Subnet Group | `<db_subnet_group>` (스택 `db_subnet_group`의 키) | `data` |
+| ElastiCache Subnet Group | `<elasticache_subnet_group>` (스택 `elasticache_subnet_group`의 키) | `data` |
+| Redshift Subnet Group | `<redshift_subnet_group>` (스택 `redshift_subnet_group`의 키) | `data` |
+| MemoryDB Subnet Group | `<memorydb_subnet_group>` (스택 `memorydb_subnet_group`의 키) | `data` |
+
+---
+
+## 7. 이름 규칙
+
+이름 접두어 `<prefix>`는 필수 입력 `context.name_prefix`로 한다(10절). 모든 리소스의 이름은 `<prefix>-<이름>-<유형 접미어>`이며, `<이름>`은 호출자가 정한 마지막 마디(리소스 키의 마지막 세그먼트)이지 `/`를 포함한 리소스 키 전체가 아니다. 이름이 없는 단일 리소스는 `<prefix>-<유형 접미어>`다. 그 이름이 `Name` 태그인지 리소스 `name` 인자인지는 표의 적용 대상 열이 정한다. 모듈은 스택·AZ를 조합해 이름을 만들어 내지 않는다. 예를 들어 `name_prefix = "dxplat-an2p"`, 서브넷 이름 `blb-a1`이면 서브넷은 `dxplat-an2p-blb-a1-sn`이고, Route Table 키 `pri-a1`이면 Route Table은 `dxplat-an2p-pri-a1-rt`, NAT 키 `a1`이면 NAT는 `dxplat-an2p-a1-nat`이다. 이 표가 이름 규칙의 유일한 정의다.
+
+| 리소스 | 이름 | 이름 출처 | 적용 대상 |
+| --- | --- | --- | --- |
+| VPC | `<prefix>-vpc` | 없음 | `Name` 태그 |
+| Internet Gateway | `<prefix>-igw` | 없음 | `Name` 태그 |
+| Egress-only IGW | `<prefix>-eigw` | 없음 | `Name` 태그 |
+| Subnet (Shared, Stack 모두) | `<prefix>-<name>-sn` | 서브넷 이름(리소스 키의 마지막 마디) | `Name` 태그 |
+| Route Table | `<prefix>-<rt_key>-rt` | `route_tables` 키 | `Name` 태그 |
+| NAT Gateway | `<prefix>-<nat_key>-nat` | `nat_gateways` 키 | `Name` 태그 |
+| EIP | `<prefix>-<nat_key>-eip` | `nat_gateways` 키 | `Name` 태그 |
+| Network Interface | `<prefix>-<eni_key>-eni` | `eni_interfaces` 키 | `Name` 태그 |
+| Security Group | `<prefix>-<sg_key>-sg` | `security_groups` 키 | 리소스 `name` 인자와 `Name` 태그 |
+| Network ACL | `<prefix>-<stack>-nacl`, Shared Public은 `<prefix>-shared-public-nacl` | 스택 키 / Shared Public은 고정값 `shared-public` | `Name` 태그 |
+| 기본 SG / RT / NACL | `<prefix>-default-sg`, `<prefix>-default-rt`, `<prefix>-default-nacl` | 없음 | `Name` 태그 |
+| DB Subnet Group | `<prefix>-<db_subnet_group>-sng` | 스택 `db_subnet_group`의 키 | 리소스 `name` 인자와 `Name` 태그 |
+| ElastiCache Subnet Group | `<prefix>-<elasticache_subnet_group>-ecsng` | 스택 `elasticache_subnet_group`의 키 | 리소스 `name` 인자와 `Name` 태그 |
+| Redshift Subnet Group | `<prefix>-<redshift_subnet_group>-rssng` | 스택 `redshift_subnet_group`의 키 | 리소스 `name` 인자와 `Name` 태그 |
+| MemoryDB Subnet Group | `<prefix>-<memorydb_subnet_group>-mdsng` | 스택 `memorydb_subnet_group`의 키 | 리소스 `name` 인자와 `Name` 태그 |
+| VPC Endpoint | `<prefix>-<service>-vpce` | 서비스 이름 | `Name` 태그 |
+| Endpoint SG | `<prefix>-vpce-sg` | 없음 | 리소스 `name` 인자와 `Name` 태그 |
+| VGW / CGW | `<prefix>-vgw`, `<prefix>-<cgw_key>-cgw` | 없음 / `customer_gateways` 키 | `Name` 태그 |
+| VGW Attachment | 해당 없음(태그를 지원하지 않는 리소스) | 없음 | 해당 없음 |
+| Flow Log | `<prefix>-<destination_key>-vpc-flow` | `flow_log.destinations` 키 | `Name` 태그 |
+| Private Hosted Zone | 도메인 이름 | 없음 | 리소스 `name` 인자와 `Name` 태그 |
+| DHCP Options | `<prefix>-dhcp` | 없음 | `Name` 태그 |
+
+- 서브넷 이름은 VPC 전체(Shared와 모든 스택)에서 유일해야 한다. 같은 이름이 두 곳에 있으면 `Name` 태그가 겹치므로 plan 실패.
+- 호출자가 정하는 이름 키(스택, 서브넷, Route Table, NAT, ENI, Security Group, NACL 룰, CGW, 네 종류의 Subnet Group, Flow Log 목적지)에는 소문자, 숫자, `-`만 허용한다. 위반 시 plan 실패. AWS 서비스 이름(`ecr.api`)과 CIDR처럼 AWS 값 자체가 키인 경우는 이 규칙의 대상이 아니다.
+- `Name`을 갖지 않는 리소스: NACL 룰, Security Group 룰, VGW Attachment. 이름 규칙 표의 대상이 아니며 태그는 상위 리소스의 태그를 따른다(POLICIES 4.1절).
+- 적용 대상이 리소스 `name` 인자인 리소스는 `<prefix>`와 합친 최종 이름이 AWS의 문자·길이 제약을 받는다. 가장 짧은 제약은 IAM 롤 64자이며 나머지는 255자 이상이다. 모듈은 최종 이름의 길이를 검사하지 않고 호출자가 `context.name_prefix` 길이로 관리하며, 이 사실을 변수 `description`에 적는다. 이름 키의 문자 규칙은 위 항목이 정한다.
+- 예약 키. 호출자가 정하는 이름 키 중 다음은 쓸 수 없으며 위반 시 plan 실패다. 스택 키가 `shared-`로 시작하는 것(Shared 리소스의 키 접두어 `shared-network/`와 이름 `<prefix>-shared-public-nacl`이 `shared-`를 쓴다), Security Group 키 `vpce`(Endpoint 전용 SG 이름 `<prefix>-vpce-sg`와 겹친다, RSC-VPCE-04). 이 항목이 예약 키의 유일한 정의다.
+
+---
+
+## 8. 입력 계약
+
+### 8.1 입력 변수
+
+10절 입력 모델을 리소스별로 구체화한다. 이 표가 모듈 입력의 유일한 정의다. 복잡한 변환을 `locals`에서 하지 않고 입력 구조 자체가 리소스 인자에 그대로 대응되어야 한다. 모든 행은 선택 필드를 `optional(<타입>, <기본값>)`으로 적어 필수·선택과 기본값이 표에서 바로 읽히게 한다. 표에서 쓰는 약칭 `서브넷Map`·`NACL`·`NACL_RULE`·`SG_RULE`의 타입 정의는 8.2절에 둔다.
+
+
+| 입력 | 타입 골격 | 대응 절 |
+| --- | --- | --- |
+| `context` | `object({ name_prefix = string, tags = map(string), region = string, pri_domain = string, region_alias = optional(string), project = optional(string), environment = optional(string), env_alias = optional(string), owner = optional(string), team = optional(string), cost_center = optional(number) })`, 필수. 10절 참조 버전 출력 `context`의 부분집합이며 출력에만 있는 필드는 타입에 두지 않는다. 필수 필드도 값이 `null`일 수 있다(10절) | 7절, POLICIES 4.1절, 10절 |
+| `vpc_cidr`, `secondary_cidrs` | `string`(필수), `set(string)` 기본 `[]` | REQUIREMENTS 6.1절 |
+| `enable_ipv6` | `bool`, 기본 `false` | RSC-VPC-05 |
+| `shared_public` | `object({ tags = optional(map(string), {}), nacl = optional(NACL, null), subnets = 서브넷Map })`, 기본 `null` | REQUIREMENTS 6.3절, REQUIREMENTS 6.8절 |
+| `vpc_endpoint_subnets` | `서브넷Map`, 기본 `{}` | RSC-VPCE-07 |
+| `route_tables` | `map(object({ routes = optional(map(object({ gateway = optional(string), nat_gateway = optional(string), eni = optional(string), network_interface_id = optional(string) })), {}), propagate_vgw = optional(bool, false), tags = optional(map(string), {}) }))`, 기본 `{}`. `routes`의 키는 목적지 CIDR | REQUIREMENTS 6.7절 |
+| `nat_gateways` | `map(object({ public_subnet = string, eip_allocation_id = optional(string), tags = optional(map(string), {}) }))`, 기본 `{}` | REQUIREMENTS 6.5절 |
+| `security_groups` | `map(object({ description = optional(string), ingress = optional(map(SG_RULE), {}), egress = optional(map(SG_RULE), {}), tags = optional(map(string), {}) }))`, 기본 `{}`. 키는 SG 이름, `ingress`·`egress`의 키는 룰 이름이다 | REQUIREMENTS 6.6절 |
+| `eni_interfaces` | `map(object({ subnet = string, private_ips = optional(set(string)), security_group_names = optional(set(string)), security_group_ids = optional(set(string)), source_dest_check = optional(bool, true), interface_type = optional(string), description = optional(string), tags = optional(map(string), {}) }))`, 기본 `{}`. 키는 ENI 이름, `subnet`은 서브넷 이름, `security_group_names`는 `security_groups`의 키다 | REQUIREMENTS 6.6절 |
+| `stack_subnets` | `map(object({ tags = optional(map(string), {}), nacl = optional(NACL, null), db_subnet_group = optional(map(set(string)), {}), elasticache_subnet_group = optional(map(set(string)), {}), redshift_subnet_group = optional(map(set(string)), {}), memorydb_subnet_group = optional(map(set(string)), {}), subnets = 서브넷Map }))`, 기본 `{}`. `subnets`의 키는 서브넷 이름이며 Role 계층이 없다. 네 Subnet Group 필드의 키는 그룹 이름이고 값은 서브넷 이름 집합 | REQUIREMENTS 6.4절, REQUIREMENTS 6.8절 |
+| `vpc_endpoints` | `object({ gateway = optional(set(string), []), interface = optional(map(object({ private_dns_enabled = optional(bool, true), policy = optional(string), security_group_names = optional(set(string)), security_group_ids = optional(set(string)) })), {}) })`, 기본 `null` | REQUIREMENTS 6.10절 |
+| `vpn_gateway` | `object({ amazon_side_asn = optional(string), availability_zone = optional(string), existing_id = optional(string) })`, 기본 `null`. `{}`를 주면 AWS 기본 ASN으로 VGW 1개 | REQUIREMENTS 6.11절 |
+| `customer_gateways` | `map(object({ bgp_asn = string, ip_address = string, device_name = optional(string), tags = optional(map(string), {}) }))`, 기본 `{}` | REQUIREMENTS 6.11절 |
+| `flow_log` | `object({ destinations = map(object({ log_destination_arn = string, log_destination_type = string, iam_role_arn = optional(string), traffic_type = optional(string, "ALL"), max_aggregation_interval = optional(number, 600), log_format = optional(string, <29필드 기본 포맷>), destination_options = optional(object({ file_format = optional(string, "parquet"), hive_compatible_partitions = optional(bool, true), per_hour_partition = optional(bool, true) })) })) })`, 기본 `null`. `destinations`의 키는 목적지 이름이며 항목 하나가 Flow Log 하나다 | REQUIREMENTS 6.12절 |
+| `private_dns` | `object({ domain_name = optional(string), additional_vpc_ids = optional(set(string), []) })`, 기본 `null`. `{}`를 주면 `context.pri_domain`으로 존 1개 | REQUIREMENTS 6.13절 |
+| `dhcp_options` | `object({ domain_name = optional(string), domain_name_servers = optional(list(string), ["AmazonProvidedDNS"]), ntp_servers = optional(list(string), []), netbios_name_servers = optional(list(string), []), netbios_node_type = optional(string) })`, 기본 `null`. `{}`를 주면 `context.pri_domain`과 기본 DNS로 옵션 세트 1개 | REQUIREMENTS 6.9절 |
+| `tags` | `map(string)`, 기본 `{}`. 모든 리소스에 적용하는 모듈 공통 커스텀 태그(POLICIES 4절 2단계) | POLICIES 4.1절 |
+
+- 모든 `object` 입력은 `optional()`로 선택 필드를 표현한다. 정적 기본값과 파생 기본값의 처리는 POLICIES 2.1절을 따르며, 파생 규칙(`context.pri_domain`, AWS 기본값 적용 등)은 본문 요구사항 ID와 변수 `description`에 명시한다.
+- 스칼라 타입은 대응하는 AWS provider 인자 타입을 따른다. `netbios_node_type`, `bgp_asn`, `amazon_side_asn`은 provider 스키마에서 문자열이므로 `string`으로 받는다(provider 6.64.0 기준).
+- 이 표에 없는 입력은 두지 않는다. 입력을 추가할 때는 이 표와 대응 절을 같은 변경에서 갱신한다.
+
+### 8.2 타입 약칭
+
+8.1절 입력 표가 쓰는 약칭의 타입 정의다.
+
+```hcl
+# 서브넷Map (2.3절)
+map(object({
+  az          = string
+  cidr        = string
+  route_table = string
+  ipv6_index  = optional(number)
+  tags        = optional(map(string), {})
+}))
+
+# NACL (REQUIREMENTS 6.8절). ingress·egress 는 룰 이름을 키로 하는 Map 이다
+object({
+  ingress = optional(map(NACL_RULE), {})
+  egress  = optional(map(NACL_RULE), {})
+})
+
+# SG_RULE (RSC-SG-04). ingress·egress 는 룰 이름을 키로 하는 Map 이다.
+# icmp·icmpv6 는 from_port 가 ICMP 타입, to_port 가 코드다(전체는 -1).
+object({
+  ip_protocol                    = string
+  from_port                      = optional(number)
+  to_port                        = optional(number)
+  cidr_ipv4                      = optional(string)
+  cidr_ipv6                      = optional(string)
+  prefix_list_id                 = optional(string)
+  referenced_security_group_name = optional(string)
+  referenced_security_group_id   = optional(string)
+  description                    = optional(string)
+})
+
+# NACL_RULE (RSC-NACL-02)
+object({
+  rule_number     = number
+  rule_action     = string
+  protocol        = string
+  from_port       = optional(number)
+  to_port         = optional(number)
+  cidr_block      = optional(string)
+  ipv6_cidr_block = optional(string)
+  icmp_type       = optional(number)
+  icmp_code       = optional(number)
+})
+```
+
+### 8.3 프로토콜과 포트 공통 규칙
+
+NACL 룰(RSC-NACL-02)과 Security Group 룰(RSC-SG-04)이 함께 쓰는 규칙이다. 이 절이 유일한 정의이며 두 요구사항은 여기를 참조하고 다시 적지 않는다. 필드 이름은 리소스 인자를 따라 NACL 룰은 `protocol`, SG 룰은 `ip_protocol`이다.
+
+- 프로토콜 값은 `"-1"`(전체), `"tcp"`, `"udp"`, `"icmp"`, `"icmpv6"`와 각각에 대응하는 번호 문자열 `"6"`, `"17"`, `"1"`, `"58"`만 허용한다. 허용 값 밖이면 plan 실패.
+- `"tcp"`·`"udp"`는 `from_port`·`to_port`가 필수다. 없으면 plan 실패.
+- `"-1"`은 포트를 갖지 않는다. 포트나 ICMP 필드를 주면 plan 실패.
+- ICMP의 타입·코드를 담는 자리는 리소스마다 다르다. NACL 룰은 전용 필드 `icmp_type`·`icmp_code`에, SG 룰은 포트 자리에 담아 `from_port`가 타입, `to_port`가 코드이며 전체를 뜻할 때 `-1`을 적는다. 어느 쪽이든 값이 없으면 plan 실패.
+
+---
+
+## 9. 출력 계약
+
+| ID | 요구사항 |
+| --- | --- |
+| RSC-OUT-01 | 복수 리소스 출력은 리소스 키(6절)를 그대로 키로 갖는 Map으로 낸다. 예: `subnet_ids = { "web/app-a1" = "subnet-...", "shared-network/public/pub-a1" = "subnet-..." }`. 특정 범위만 모은 편의 출력(`shared_network`, `stacks.<stack>`)은 예외로 그 범위 안에서 유일한 이름을 키로 쓴다(DEC-053). |
+| RSC-OUT-04 | 단일 리소스 출력은 리소스가 없으면 `null`을 낸다. 빈 문자열을 쓰지 않는다. |
+| RSC-OUT-06 | 모듈은 아래 출력 표의 항목을 모두 제공한다. 항목을 추가할 수 있으나 삭제·개명은 MAJOR 변경으로 취급한다. |
+
+| 출력 | 형식 | 내용 |
+| --- | --- | --- |
+| `vpc_id`, `vpc_arn`, `vpc_cidr_block`, `vpc_ipv6_cidr_block`, `vpc_owner_id` | 단일 | VPC 속성 |
+| `vpc_secondary_cidr_association_ids` | CIDR → ID | 보조 CIDR 연관 |
+| `igw_id`, `igw_arn`, `eigw_id` | 단일 | 게이트웨이 |
+| `default_security_group_id`, `default_network_acl_id`, `default_route_table_id`, `dhcp_options_id` | 단일 | 기본 리소스 |
+| `subnet_ids`, `subnet_arns`, `subnet_cidr_blocks`, `subnet_ipv6_cidr_blocks` | 서브넷 키 → 값 | Shared Public·VPC Endpoint·모든 스택 서브넷. 키 접두어(`shared-network/…`, `<stack>/…`)로 구분한다 |
+| `shared_network.public_subnet_ids`, `.public_subnet_arns`, `.public_subnet_cidr_blocks` | 서브넷 이름 → 값 | Shared Public Subnet 편의 출력 |
+| `shared_network.vpce_subnet_ids`, `.vpce_subnet_arns`, `.vpce_subnet_cidr_blocks` | 서브넷 이름 → 값 | VPC Endpoint Subnet 편의 출력(정의 시) |
+| `nat_gateway_ids`, `nat_eip_allocation_ids`, `nat_public_ips` | NAT 키 → 값 | 모든 NAT와 EIP. `nat_public_ips`는 EIP 재사용 여부와 무관하게 NAT의 퍼블릭 IP(RSC-NAT-03) |
+| `eni_ids`, `eni_arns`, `eni_private_ips` | ENI 키 → 값 | 모듈이 만든 ENI(REQUIREMENTS 6.6절). `eni_private_ips`는 기본 사설 IP(`private_ip`)이며 호출자가 인스턴스 연결에 쓴다 |
+| `security_group_ids`, `security_group_arns` | SG 키 → 값 | 모듈이 만든 Security Group(REQUIREMENTS 6.6절). 호출자가 룰 리소스를 붙일 때 쓴다(RSC-SG-03). 입력 `eni_interfaces.<key>.security_group_ids`는 호출자가 만든 SG의 ID 집합이라 이름은 같고 뜻이 다르다. Endpoint 전용 SG는 `vpc_endpoint_security_group_id`로 따로 낸다 |
+| `route_table_ids` | RT 키 → ID | 모든 RT. Peering 모듈에 경로 추가 대상으로 전달하는 값(5.2절) |
+| `route_table_association_ids` | 서브넷 키 → ID | 모든 서브넷의 RT 연결 |
+| `network_acl_ids`, `network_acl_arns` | NACL 키 → 값 | 전용 NACL |
+| `stacks.<stack>.subnet_ids`와 네 유형의 `.<type>_subnet_group_names`·`.<type>_subnet_group_arns`(`db`, `elasticache`, `redshift`, `memorydb`) | 서브넷 이름 또는 그룹 키 → 값 | 스택 단위 조회 편의 출력. `subnet_ids`는 그 스택 서브넷의 이름 → ID 이며 Role별 분류를 두지 않는다(2.2절). 워크로드 모듈에 넘길 서브넷은 호출자가 이름으로 고른다. Shared Network 리소스는 넣지 않는다 |
+| `vpc_endpoint_ids`, `vpc_endpoint_dns_entries`, `vpc_endpoint_security_group_id` | 서비스 → 값, 단일 | Endpoint |
+| `vgw_id`, `vgw_arn`, `vgw_attachment_id` | 단일 | VGW. `vgw_attachment_id`는 `vpn_gateway.existing_id`로 기존 VGW를 연결할 때만 값이 있고 그 외에는 `null`이다(RSC-VPN-02) |
+| `cgw_ids`, `cgw_arns` | CGW 키 → 값 | CGW |
+| `flow_log_ids`, `flow_log_arns`, `flow_log_destination_arns` | 목적지 키 → 값 | Flow Log. 키는 `flow_log.destinations`의 키다(RSC-FLOW-01). 목적지 리소스는 모듈이 만들지 않으므로 로그 그룹·IAM 롤 출력은 두지 않는다(RSC-FLOW-08) |
+| `private_zone_id`, `private_zone_name`, `private_zone_arn` | 단일 | Private Hosted Zone |
+
+룰 리소스(NACL 룰, Security Group 룰)는 출력하지 않는다. 룰은 상위 리소스의 키로 추적하며, 호출자가 룰을 더할 때 필요한 것은 SG ID(`security_group_ids`)뿐이다.
+
+---
+
+## 10. `context` 계약
+
+모듈은 [tfmodule-context](https://github.com/oniops/tfmodule-context) 모듈의 출력 객체 `context`를 필수 입력으로 받는다. 참조 버전은 `v1.3.5`이며 이 절이 참조 버전의 유일한 정의다. `module "ctx"`와 `module "vpc"`를 함께 호출하는 예시는 README Usage 절에 둔다.
+
+`context`가 제공하는 값과 모듈에서의 용도는 다음과 같다.
+
+| 필드 | 용도 |
+| --- | --- |
+| `name_prefix` | 모든 리소스 이름의 접두어. 별도 `vpc_name` 입력을 두지 않는다 |
+| `tags` | 모든 리소스 태그 병합의 1단계(POLICIES 4절) |
+| `region` | Interface VPC Endpoint 서비스 이름(`com.amazonaws.<region>.<service>`) 구성. 리소스 배치 리전은 호출자의 `provider` 가 정하며 별도 `region` 입력을 두지 않는다 |
+| `pri_domain` | Private DNS 도메인과 DHCP 도메인 기본값 |
+| `region_alias`, `project`, `environment`, `env_alias`, `owner`, `team`, `cost_center` | 모듈이 직접 쓰지 않는다. tfmodule-context가 `name_prefix`와 `tags`를 만들 때 이미 반영한 값이며 `optional()`로 받는다 |
+
+- 모듈의 `variable "context"`는 참조 버전 출력 `context`의 **부분집합**이다. 모듈이 쓰는 `name_prefix`, `tags`, `region`, `pri_domain`만 필수 필드로 두고 위 표의 나머지 필드는 `optional()`로 받는다. 표에 없는 출력 필드는 타입에 두지 않으며 Terraform이 변환 시 버린다. 타입 골격은 8.1절이 정의한다.
+- 필수 필드라도 값이 `null`일 수 있다. Terraform은 필수 속성에 `null`을 허용하므로 `pri_domain`과 `region`은 그 값을 쓰는 시점에 `null`이면 plan 단계에서 실패시킨다. `pri_domain`은 `domain_name`을 생략한 DHCP Options·Private Hosted Zone에서(RSC-DEF-04, RSC-DNS-01), `region`은 Interface VPC Endpoint를 만들 때(RSC-VPCE-02) 그 대상이다. `name_prefix`와 `tags`는 모든 리소스가 쓰므로 `null`이면 어느 리소스에서든 실패한다.
+- 이름 접두어를 `context` 외의 입력으로 덮어쓰는 기능은 제공하지 않는다. 태그는 POLICIES 4절 병합 순서에 따라 덮어쓸 수 있으나 보호 키는 예외다.
+- 리소스 이름(`Name` 태그) 규칙은 7절을 따른다.
+
+입력 변수 전체 목록과 타입은 8.1절이 유일한 정의다.
+
+---
+
+## 11. EKS 스택
+
+EKS 클러스터를 이 VPC 위에 올릴 때 서브넷에 필요한 태그를 안내한다. EKS 스택은 다른 스택과 같은 `stack_subnets` 항목이며 새 라우팅·NAT·NACL 규칙을 도입하지 않는다. 모듈은 이 태그를 만들지 않고 호출자가 서브넷 `tags`, `shared_public.tags`, 스택 `tags` 중 아래 표가 정한 위치에 직접 적는다.
+
+### 11.1 기본 원칙
+
+- EKS 스택은 다른 스택과 같은 `stack_subnets` 항목이며 새 라우팅, NAT, NACL 규칙을 도입하지 않는다(2.2절). 어느 서브넷이 어디로 나가는지는 그 서브넷의 `route_table`이 정한다(2.2절 권장 용도 표).
+- EKS 스택의 Private 통신 정책과 모듈 구현 범위는 5.1절을 따른다. Pod-to-Pod, Namespace 접근 통제는 Kubernetes 계층의 책임이다.
+
+### 11.2 Role별 권장 태그
+
+| 대상 | 태그 | 값 | 필요 조건 |
+| --- | --- | --- | --- |
+| 노드 서브넷 줄 `tags` | `kubernetes.io/role/internal-elb` | `1` | AWS Load Balancer Controller가 Internal LB 서브넷을 자동 탐색할 때 |
+| 노드 서브넷 줄 `tags` | `karpenter.sh/discovery` | `<cluster_name>` | Karpenter 사용 시. Node가 생성될 서브넷에만 |
+| `shared_public.tags` 또는 Public 서브넷 줄 `tags` | `kubernetes.io/role/elb` | `1` | Internet-facing LB 서브넷 자동 탐색 |
+| 노드 서브넷과 Public 서브넷 줄 `tags` | `kubernetes.io/cluster/<cluster_name>` | `shared` | 구버전 AWS Load Balancer Controller, 기존 조직 표준 등 호환성이 필요할 때만. 최신 EKS 구성에서는 불필요 |
+| 스택 `tags` | `ClusterName` | `<cluster_name>` | 조직 식별용(선택). 스택 `tags`이므로 서브넷뿐 아니라 그 스택의 NACL 과 네 종류의 Subnet Group 에도 적용된다(POLICIES 4.1절) |
+
+- 데이터 계층·캐시 서브넷 줄에는 `kubernetes.io/*`, `karpenter.sh/*` 태그를 두지 않는다. 특히 `karpenter.sh/discovery`가 붙으면 Karpenter가 그 서브넷에 노드를 띄울 수 있다. 같은 이유로 컨트롤러 태그를 스택 `tags`로 올리지 않는다.
+- 한 VPC에 EKS 스택이 여러 개면 `karpenter.sh/discovery`와 `kubernetes.io/cluster/*`는 스택마다 자기 `cluster_name`으로 정의한다. 값이 클러스터와 무관한 `kubernetes.io/role/elb`·`internal-elb`는 여러 클러스터가 공유할 수 있고, Shared Public Subnet을 여러 클러스터가 쓰면 각 클러스터의 `kubernetes.io/cluster/<cluster_name>` 태그를 함께 둔다.
+- Karpenter가 탐색하는 Security Group 태그는 EKS 노드 SG의 몫이며 워크로드 모듈이 만든다. 이 모듈이 만드는 SG는 자기가 만든 ENI에 붙이는 것뿐이고(REQUIREMENTS 6.6절), EKS 스택에는 서브넷 태그만 관여한다.
+
+### 11.3 예시
+
+전체 예시는 POLICIES 9.4절의 `eks` 기준 입력이다(저장소에 두지 않는 로컬 검증 자산이다). 3 AZ에 EKS 스택 5개(`svc`, `auction`, `cms`, `toolchain`, `obsv`)를 두고 VPC Endpoint Subnet, Interface Endpoint, 스택 NACL, Flow Log를 함께 선언한다. 아래는 그 파일에서 Shared Public 과 `svc` 스택을 2개 AZ 로 줄여 발췌한 것이다. `context`, `vpc_cidr`, `nat_gateways`, `route_tables`(`pub`, `pri-a1`, `pri-c1`, `isolated`) 선언을 생략했으므로 이 블록만으로는 plan 할 수 없다. 단독 plan 은 `eks` 기준 입력 전체로 한다. 발췌 자체는 AZ 2개 이상(RSC-AZ-02)과 DB Subnet Group 멤버 2 AZ 이상(RSC-SUB-05) 제약을 지킨다.
+
+```hcl
+# Shared Public. 공통 tags 가 그 아래 모든 서브넷에 적용된다.
+shared_public = {
+  tags = { "kubernetes.io/role/elb" = "1" }
+  subnets = {
+    pub-a1 = { az = "apne2-az1", cidr = "10.100.0.0/24", route_table = "pub" }
+    pub-c1 = { az = "apne2-az3", cidr = "10.100.1.0/24", route_table = "pub" }
+  }
+}
+
+stack_subnets = {
+  svc = {
+    # 스택 tags: 이 스택의 모든 서브넷, NACL, DB Subnet Group 에 적용된다.
+    tags = {
+      ClusterName = "dxplat-an2p-svc-eks"
+      ServiceRole = "workload"
+      Stack       = "svc"
+    }
+
+    # 서브넷 평면 Map. 계층은 이름으로, 성격은 route_table 로 나타낸다. Role 계층은 없다.
+    # 컨트롤러 태그는 노드 서브넷 줄에만 적어 데이터 계층 서브넷에 붙지 않게 한다(11.2절).
+    subnets = {
+      svc-node-a1 = { az = "apne2-az1", cidr = "10.100.32.0/21", route_table = "pri-a1", tags = { "kubernetes.io/role/internal-elb" = "1", "karpenter.sh/discovery" = "dxplat-an2p-svc-eks" } }
+      svc-node-c1 = { az = "apne2-az3", cidr = "10.100.40.0/21", route_table = "pri-c1", tags = { "kubernetes.io/role/internal-elb" = "1", "karpenter.sh/discovery" = "dxplat-an2p-svc-eks" } }
+      svc-data-a1 = { az = "apne2-az1", cidr = "10.100.56.0/24", route_table = "isolated" }
+      svc-data-c1 = { az = "apne2-az3", cidr = "10.100.57.0/24", route_table = "isolated" }
+    }
+
+    db_subnet_group = {
+      svc-data = ["svc-data-a1", "svc-data-c1"]
+    }
+  }
+}
+```

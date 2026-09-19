@@ -1,343 +1,207 @@
 # tfmodule-aws-vpc
 
-AWS VPC 서비스를 생성 하는 테라폼 모듈 입니다.
+AWS VPC와 부속 네트워크 리소스를 한 번의 호출로 만드는 재사용 Terraform 모듈이다. 여러 워크로드 스택을 하나의 Platform VPC에 수평으로 수용하고, 스택마다 독립된 Multi-AZ 서브넷 집합으로 격리한다. 요구사항은 `requirements/requirements/ 문서 세트`이 정의하며 이 README는 사용법과 입출력 표만 담는다.
+
+만드는 리소스: VPC(보조 CIDR, IPv6), 서브넷, Route Table과 경로, Internet Gateway, Egress-only IGW, NAT Gateway·EIP, ENI, Security Group과 룰, Network ACL과 룰, DB·ElastiCache·Redshift·MemoryDB Subnet Group, VPC Endpoint(Gateway·Interface)와 Endpoint SG, VGW·CGW, Flow Log(목적지마다 1개), Private Hosted Zone, DHCP Options, 기본 SG·RT·NACL 채택.
+
+## 설계 원칙
+
+- **명시 선언**: Route Table은 `route_tables`에 목적지 → 대상으로 직접 적고, 모든 서브넷이 `route_table` 키로 그중 하나를 가리킨다. 모듈은 경로를 도출하지 않는다.
+- **Role 계층 없음**: 스택 서브넷은 이름을 키로 하는 평면 Map이다. 계층은 이름으로, 성격은 가리키는 Route Table의 기본 경로로 드러난다.
+- **안정 키**: 모든 리소스는 `for_each`와 호출자가 정한 이름을 키로 만든다. 항목을 더하거나 빼도 다른 리소스에 변경이 생기지 않는다.
+- **모듈 소유는 키로, 호출자 소유는 ID로**: 경로 대상은 `gateway`(igw·eigw·vgw), `nat_gateway`(키), `eni`(키), `network_interface_id`(호출자 ENI ID) 중 하나다.
+- **외부 확장 안전**: 경로와 SG 룰은 인라인 블록이 아닌 독립 리소스라, 다른 모듈(Peering 등)이 경로나 룰을 더해도 이 모듈의 plan이 흔들리지 않는다.
 
 ## Usage
 
-```
+`context`는 [tfmodule-context](https://github.com/oniops/tfmodule-context) `v1.3.5`의 출력을 그대로 받는다. 아래는 2 AZ, 워크로드 스택 1개, AZ별 NAT 1개의 최소 구성이다.
+
+```hcl
 module "ctx" {
-  source = "git::https://code.bespinglobal.com/scm/op/tfmodule-context.git"
-  context = {
-    aws_profile = "terran"
-    region      = "ap-northeast-2"
-    project     = "apple"
-    environment = "Production"
-    owner       = "owner@academyiac.ml"
-    team        = "DX"
-    cost_center = "20211129"
-    domain      = "academyiac.ml"
-    pri_domain  = "applegoods.local"
-  }
+  source      = "git::https://github.com/oniops/tfmodule-context.git?ref=v1.3.5"
+  context     = var.context
+  team        = "DevOps"
+  cost_center = 1000
 }
 
 module "vpc" {
-  source = "git::https://code.bespinglobal.com/scm/op/tfmodule-aws-vpc.git"
-
+  source  = "git::https://github.com/oniops/tfmodule-aws-vpc.git?ref=<tag>"
   context = module.ctx.context
 
-  cidr    = "171.2.0.0/16"
-  azs = [ data.aws_availability_zones.this.zone_ids[0], data.aws_availability_zones.this.zone_ids[1] ]
+  vpc_cidr = "10.230.0.0/16"
 
-  enable_nat_gateway = true
-  single_nat_gateway = true
+  route_tables = {
+    pub    = { routes = { "0.0.0.0/0" = { gateway = "igw" } } }
+    pri-a1 = { routes = { "0.0.0.0/0" = { nat_gateway = "a1" } } }
+    pri-c1 = { routes = { "0.0.0.0/0" = { nat_gateway = "c1" } } }
+    iso    = {}
+  }
 
-  public_subnets       = ["171.2.11.0/24", "171.2.12.0/24"]
-  public_subnet_names  = ["pub-a1", "pub-b1"]
-  public_subnet_suffix = "pub"
+  nat_gateways = {
+    a1 = { public_subnet = "pub-a1" }
+    c1 = { public_subnet = "pub-c1" }
+  }
 
-  private_subnets      = ["171.2.31.0/24", "171.2.32.0/24"]
-  private_subnet_names = ["pri-a1", "pri-b1"]
+  shared_public = {
+    subnets = {
+      pub-a1 = { az = "apne2-az1", cidr = "10.230.0.0/24", route_table = "pub" }
+      pub-c1 = { az = "apne2-az3", cidr = "10.230.1.0/24", route_table = "pub" }
+    }
+  }
 
-  depends_on = [module.ctx]
+  stack_subnets = {
+    web = {
+      tags = { Stack = "web" }
+      subnets = {
+        app-a1  = { az = "apne2-az1", cidr = "10.230.30.0/24", route_table = "pri-a1" }
+        app-c1  = { az = "apne2-az3", cidr = "10.230.31.0/24", route_table = "pri-c1" }
+        data-a1 = { az = "apne2-az1", cidr = "10.230.40.0/24", route_table = "iso" }
+        data-c1 = { az = "apne2-az3", cidr = "10.230.42.0/24", route_table = "iso" }
+      }
+      db_subnet_group = { data = ["data-a1", "data-c1"] }
+    }
+  }
+
+  vpc_endpoints = { gateway = ["s3"] }
+  private_dns   = {}
+  tags          = { Platform = "dxplat" }
 }
-
-
-data "aws_availability_zones" "this" {
-  state = "available"
-}
-
 ```
 
-### Dependencies Module
-- Context 모듈은 [tfmodule-context](./tfmodule-context.md) 가이드를 참고 하세요.
+목적지가 여러 곳인 Flow Log 는 `destinations` 에 항목을 더한다. 로그 그룹·버킷·Delivery Stream 과 그 IAM 롤은 모듈이 만들지 않고 ARN 만 참조한다(RSC-FLOW-08).
 
-
-## NAT Gateway 구성 시나리오
-VPC 내의 서비스 및 인스턴스(EC2)가 외부의 www 자원을 액세스 하기 위해 배치 합니다.
-
-- 하나의 NAT 를 배치 합니다.
-```
-    enable_nat_gateway = true
-    single_nat_gateway = true
-```
-
-- 가용 영역(Availability Zone) 마다 NAT 를 배치 합니다.
-```shell
-    enable_nat_gateway = true
-    one_nat_gateway_per_az = true
-    single_nat_gateway = false
-```
-이 경우 가용 영역별 라우팅 테이블과 NAT 가 자동 매핑 됩니다.
-
-- 서브 네트워크 마다 NAT 를 배치 합니다.
-```shell
-    enable_nat_gateway = true
-    one_nat_gateway_per_az = false
-    single_nat_gateway = false
-```
-
-## VPC Flow 로그
-VPC 흐름 로그를 사용하면 특정 네트워크 인터페이스(ENI), 서브넷 또는 전체 VPC에 대한 IP 트래픽을 캡처할 수 있습니다.
-
-```
-  enable_flow_log           = true
-  flow_log_destination_type = "s3"
-  flow_log_destination_arn  = "<s3_bucket_arn>"
-  flow_log_file_format      = "parquet"
-  vpc_flow_log_tags = {
-    Name = "my-vpc-flow-logs-s3-bucket"
+```hcl
+  flow_log = {
+    destinations = {
+      s3 = {
+        log_destination_type = "s3"
+        log_destination_arn  = "arn:aws:s3:::org-vpc-flowlogs/platform"
+        destination_options  = {} # parquet + Hive 파티션 + 시간별 파티션
+      }
+      cloudwatch = {
+        log_destination_type = "cloud-watch-logs"
+        log_destination_arn  = "arn:aws:logs:ap-northeast-2:111122223333:log-group:/vpc/flowlogs:*"
+        iam_role_arn         = "arn:aws:iam::111122223333:role/flowlogs-to-cloudwatch"
+      }
+    }
   }
 ```
-[vpc-flow-logs 샘플](https://github.com/terraform-aws-modules/terraform-aws-vpc/blob/master/examples/vpc-flow-logs/main.tf) 참고
 
-## VPC IP Pool 확장
-IP 주소 풀을 확장하기 위해 VP C와 연결할 보조 CIDR 블록을 정의 합니다.  
-애플리케이션 배치를 위한 대상 그룹의 타겟 유형이 IP 이거나, EKS 등의 컨테이너가 다수 올라오게 되면 IP 가 부족할 수 있는데 여기에 대응하기위해 IP 풀을 확장 합니다.
-```
-    cidr                  = "172.0.0.0/16"
-    secondary_cidr_blocks = ["172.1.0.0/16", "172.2.0.0/16"]
-```
-[vpc-secondary_cidr_blocks 샘플](https://github.com/terraform-aws-modules/terraform-aws-vpc/blob/master/examples/secondary-cidr-blocks/main.tf) 참고
-
-
-## NACL 방화벽 정책 참고
-```
-locals {
-  network_acls = {
-    default_inbound = [
-      {
-        rule_number = 900
-        rule_action = "allow"
-        from_port   = 1024
-        to_port     = 65535
-        protocol    = "tcp"
-        cidr_block  = "0.0.0.0/0"
-      },
-    ]
-    default_outbound = [
-      {
-        rule_number = 900
-        rule_action = "allow"
-        from_port   = 32768
-        to_port     = 65535
-        protocol    = "tcp"
-        cidr_block  = "0.0.0.0/0"
-      },
-    ]
-}
-
-module "vpc" {
-  ...
-  public_dedicated_network_acl = true
-  public_inbound_acl_rules  = local.network_acls["default_inbound"]
-  public_outbound_acl_rules = local.network_acls["default_outbound"]
-  ...
-}  
-```
-[NACL 샘플](https://github.com/terraform-aws-modules/terraform-aws-vpc/blob/master/examples/network-acls/main.tf) 참고
-
-
-## VPN Gateway 를 통한 외부 네트워크간 연결
-온-프레미스 또는 다른 CSP 벤더의 VPN 게이트웨이를 VPC 에 연결 할 수 있습니다.
-
-- VPC 모듈을 통한 VGW 구성 예시 
-```
-  enable_vpn_gateway                 = true     # Virtual Private Gateway (VGW) 구성 및 VPC 와 연결  
-  propagate_private_route_tables_vgw = true     # Public  라우팅 테이블과 연결 
-  propagate_public_route_tables_vgw =  true     # Private 라우팅 테이블과 연결
-```
-
-- [tfmodule-aws-vpn-gateway](https://code.bespinglobal.com/scm/op/tfmodule-aws-vpn-gateway.git) 모듈을 통해 Customer Gateway (CGW)를 및 VPN 연결을 구성하는 예시 
-
-- Customer Gateway (CGW) 및 VPN 연결을 직접 구성 하는 예시  
-```
-resource "aws_customer_gateway" "azure" {
-  bgp_asn    = 65000
-  ip_address = "211.12.31.33" # Azure 의 public 게이트웨이 아이피
-  type       = "ipsec.1"
-  tags = {}
-}
-
-# VPC 의 VPN 게이트웨이와 Azure 의 Public 게이트웨이의 연결 
-resource "aws_vpn_connection" "azure" {
-  vpn_gateway_id      = aws_vpn_gateway.main.id
-  customer_gateway_id = aws_customer_gateway.azure.id
-  type                = "ipsec.1"
-  static_routes_only  = true
-  tags = {}
-}
-
-resource "aws_vpn_connection_route" "azure" {
-  vpn_connection_id      = aws_vpn_connection.azure.id
-  destination_cidr_block = "10.2.1.0/24"
-}
-```
+각 입력의 전체 필드와 기본값은 `variables.tf`의 `description`에 호출 예시와 함께 있다. 스택 전용 Public, 보조 CIDR, NAT 인스턴스 ENI, NACL, VGW·CGW, IPv6, 3 AZ EKS 구성처럼 기능을 조합한 검증 입력 다섯 가지의 구성은 `requirements/REQUIREMENTS.md` 5.1절이 정의한다. EKS 스택에 필요한 서브넷 태그는 `requirements/ARCHITECTURE.md`에 있다.
 
 ## Input Variables
 
-| Name                                            | Description                                                         | Type | Example | Required |
-|-------------------------------------------------|---------------------------------------------------------------------|------|---------|:--------:|
-| create_vpc                                      | VPC 를 생성할지 여부입니다.                                                   | bool | true | No |
-| cidr                                            | VPC CIDR 블럭을 정의 합니다.                                                | string | "172.11.0.0/16"| Yes |
-| secondary_cidr_blocks                           | IP 주소 풀을 확장하기 위해 VP C와 연결할 보조 CIDR 블록을 정의 합니다.                      | list(string) | ["10.1.0.0/16", "10.2.0.0/16"] | No |
-| public_subnets                                  | Public 서브넷의 CIDR 블럭을 정의 합니다.                                        | list(string)  | ["10.1.111.0/24", "10.1.112.0/24"] | No |
-| public_subnet_names                             | Public 서브넷의 이름을 정의 합니다.                                             | list(string)  | ["pub-a1", "pub-b2"] | No |
-| public_subnet_suffix                            | Public 서브넷의 접미어 입니다.                                                | string | "pub" | No |
-| public_subnet_tags                              | Public 서브넷에 추가 할 태그 속성 입니다.                                         | map(string) | { Key1 = "Value1" } | No |
-| private_subnets                                 | Private 서브넷의 CIDR 블럭을 정의 합니다.                                       | list(string)  | ["10.1.21.0/24", "10.1.22.0/24"] | No |
-| private_subnet_names                            | Private 서브넷의 이름을 정의 합니다.                                            | list(string)  | ["pri-a1", "pri-b2"] | No |
-| private_subnet_suffix                           | Private 서브넷의 접미어 입니다.                                               | string | "pri" | No |
-| private_subnet_tags                             | Private 서브넷에 추가 할 태그 속성 입니다.                                        | map(string) | { Key1 = "Value1" } | No |
-| database_subnets                                | 데이터베이스 서브넷의 CIDR 블럭을 정의 합니다.                                        | list(string)  | ["10.1.91.0/24", "10.1.92.0/24"] | No |
-| database_subnet_names                           | 데이터베이스 서브넷의 이름을 정의 합니다.                                             | list(string)  | ["data-a1", "data-b2"] | No |
-| database_subnet_suffix                          | 데이터베이스 서브넷의 접미어 입니다.                                                | string | "data" | No |
-| database_subnet_tags                            | 데이터베이스 서브넷에 추가 할 태그 속성 입니다.                                         | map(string) | { Key1 = "Value1" } | No |
-| database_subnet_group_tags                      | 데이터베이스 서브넷 그룹에 추가 할 태그 속성 입니다.                                      | map(string) | { Key1 = "Value1" } | No |
-| intra_subnets                                   | Intranet 서브넷의 CIDR 블럭을 정의 합니다.                                      | list(string)  |  ["10.1.81.0/24", "10.1.82.0/24"] | No |
-| intra_subnet_names                              | Intranet 서브넷의 이름을 정의 합니다.                                           | list(string)  | ["int-a1", "int-b2"] | No |
-| intra_subnet_suffix                             | Intranet 서브넷의 접미어 입니다.                                              | string | "int" | No |
-| intra_subnet_tags                               | Intranet 서브넷에 추가 할 태그 속성 입니다.                                       | map(string) | { Key1 = "Value1" } | No |
-| create_database_subnet_route_table              | 데이터베이스 서브넷용 라우팅 테이블 생성 여부를 설정합니다.                                   | bool | false | No |
-| create_database_subnet_group                    | RDS 전용 서브넷 생성 여부입니다. database_subnets 이 정의된 경우에만 반응 합니다.            | bool | true | No |
-| create_database_internet_gateway_route          | 공용 데이터베이스 액세스를 위한 인터넷 게이트웨이를 생성 할 것인지 여부를 설정합니다.                    | bool | false | No |
-| create_database_nat_gateway_route               | 데이터베이스 서브넷에 대한 인터넷 액세스를 위해 전용 NAT 를 생성해야 하는지 여부를 설정합니다.             | bool | false | No |
-| azs                                             | 가용 영역 아이디 목록 입니다. 가용 영역은 AWS Region 마다 다르며, EC2 콘솔 화면에서 확인할 수 있습니다. | list(string)  |  ["apne2-az1", "apne2-az2"] | No |
-| enable_dns_hostnames                            | VPC 에서 DNS 호스트 이름 검색을 활성화 할 것인지 여부입니다.                              | bool | true | No |
-| enable_dns_support                              | VPC 에서 DNS 지원을 활성화 할 것인지 여부입니다.                                     | bool | true | No |
-| enable_nat_gateway                              | NAT 게이트웨이를 생성할 것인지 여부입니다.                                           | bool | false | No |
-| single_nat_gateway                              | 하나의 NAT 게이트웨이를 생성할 것인지 여부입니다.                                       | bool | false | No |
-| one_nat_gateway_per_az                          | 가용 영역별로 NAT 게이트웨이를 생성할 것인지 여부입니다.                                   | bool | false | No |
-| customer_gateways                               | 고객 게이트웨이 맵(BGP ASN 및 게이트웨이의 인터넷 라우팅 가능한 외부 IP 주소)을 정의 합니다.          | map(map(any)) | <pre>customer_gateways = {<br>  IP1 = {<br>    bgp_asn = 65112<br>    ip_address = "1.2.3.4"<br>    device_name = "some_name"<br>  },<br>  IP2 = {<br>    bgp_asn = 65112<br>    ip_address = "5.6.7.8"<br>  }<br>}</pre> | No |
-| enable_vpn_gateway                              | 신규 VPN Gateway 리소스를 생성하여 VPC 에 연결할 것 인지 여부입니다.                      | bool | false | No |
-| vpn_gateway_id                                  | VPC 에 추가 할 VPN 게이트웨이 아이디 입니다.                                       | string | example | No |
-| tags                                            | VPC 및 연관된 리소스에 추가할 tag 속성 입니다.                                      | map(any) | { Project = "startek" } | No |
-| vpc_tags                                        | VPC 리소스에 추가할 tag 속성 입니다.                                            | map(any) | { Name = "my-vpc" } | No |
-| public_acl_tags                                 | Public ACL 리소스에 추가할 tag 속성 입니다.                                     | map(any) | { Key = "my-value-1" } | No |
-| private_acl_tags                                | Private ACL 리소스에 추가할 tag 속성 입니다.                                    | map(any) | { Key = "my-value-1" } | No |
-| intra_acl_tags                                  | 인트라넷 ACL 리소스에 추가할 tag 속성 입니다.                                       | map(any) | { Key = "my-value-1" } | No |
-| database_acl_tags                               | 데이터베이스 ACL 리소스에 추가할 tag 속성 입니다.                                     | map(any) | { Key = "my-value-1" } | No |
-| customer_gateway_tags                           | 커스터머 GW 리소스에 추가할 tag 속성 입니다.                                        | map(any) | { Key = "my-value-1" } | No |
-| vpn_gateway_tags                                | VPN GW 리소스에 추가할 tag 속성 입니다.                                         | map(any) | { Key = "my-value-1" } | No |
-| vpc_flow_log_tags                               | VPC Flow 리소스에 추가할 tag 속성 입니다.                                       | map(any) | { Key = "my-value-1" } | No |
-| manage_default_network_acl                      | 기본 NACL 정책을 적용할지 여부입니다.                                             | bool | false | No |
-| default_network_acl_name                        | 기본 NACL 이름 입니다.                                                     | string | "my-nacl" | No |
-| default_network_acl_tags                        | 기본 NACL 태그 속성 입니다.                                                  | map(any) | { Key = "my-value-1" } | No |
-| public_dedicated_network_acl                    | 공용 서브넷에 대한 전용 네트워크 ACL 및 사용자 지정 규칙을 사용할지 여부 입니다.                    | bool | false | No |
-| private_dedicated_network_acl                   | Private 서브넷에 대한 전용 네트워크 ACL 및 사용자 지정 규칙을 사용할지 여부 입니다.               | bool | false | No |
-| intra_dedicated_network_acl                     | Intranet 서브넷에 대한 전용 네트워크 ACL 및 사용자 지정 규칙을 사용할지 여부 입니다.              | bool | false | No |
-| database_dedicated_network_acl                  | 데이터베이 서브넷에 대한 전용 네트워크 ACL 및 사용자 지정 규칙을 사용할지 여부 입니다.                 | bool | false | No |
-| default_security_group_name                     | VPC 에 포함될 기본 보안 그룹 이름 입니다.                                          | string | "my-default-vpc-sg" | No |
-| default_security_group_ingress                  | 기본 보안 그룹의 Ingress 룰 입니다.                                            | list(map(string)) | <pre>[<br>  {<br>    cidr_blocks = ["172.11.21.0/24"]<br>    description = "SSH"<br>    from_port   = "22"<br>    to_port     = "22"<br>    protocol    = "tcp"<br>  },<br>  {<br>    cidr_blocks = ["172.11.21.0/24"]<br>    description = "TLS"<br>    from_port   = "443"<br>    to_port     = "443"<br>    protocol    = "tcp"<br>  }<br>]</pre> | No |
-| default_security_group_egress                   | 기본 보안 그룹의 Egress 룰 입니다.                                             | list(map(string)) | <pre>[<br>  {<br>    cidr_blocks = "0.0.0.0/0"<br>    description = "Outbound HTTP"<br>    from_port   = "80"<br>    to_port     = "80"<br>    protocol    = "tcp"<br>  },<br>]</pre> | No |
-| enable_flow_log                                 | VPC Flow log 생성 여부입니다.                                              | bool | false | No |
-| flow_log_destination_type                       | VPC Flow Logs 의 데이터가 적재되는 타겟 입니다. (s3, cloud-watch-logs)            | string | "cloud-watch-logs" | No |
-| flow_log_destination_arn                        | VPC Flow Logs 데이터가 적재될 대상 리소스 ARN 입니다. (s3, cloud-watch-logs) | string | - | No |
-| flow_log_format                                 | VPC Flow Logs 의 적재 메시지 포멧입니다.                                       | string | "" | No |
-| flow_log_traffic_type                           | VPC Flow Logs 의 네트워크 전송 트래픽 유형입니다. (ACCEPT, REJECT, ALL)            | string | "ALL" | No |
-| flow_log_max_aggregation_interval               | VPC Flow Logs 의 최대 수집 간격 입니다. | number | 600 | No |
-| flow_log_file_format                            | VPC Flow Logs 의 데이터가 적재되는 파일 포멧입니다.(plain-text, parquet)            | string | "parquet" | No |
-| create_flow_log_cloudwatch_log_group            | VPC Flow Logs용 CloudWatch 로그 그룹 생성 여부입니다.                           | bool | false | No |
-| create_flow_log_cloudwatch_iam_role             | VPC Flow Logs용 CloudWatch IAM 롤 생성 여부입니다.                           | bool | false | No |
-| flow_log_cloudwatch_iam_role_arn                | VPC Flow Logs용 CloudWatch IAM 롤의 ARN 입니다. | string | - | No |
-| flow_log_cloudwatch_log_group_name_prefix       | VPC Flow Logs 용 Cloud CloudWatch 로그 그룹 경로 접두어 입니다. | string | "/aws/vpc-flow-log/" | No |
-| flow_log_cloudwatch_log_group_retention_in_days | VPC Flow Logs 용 Cloud CloudWatch 로그 그룹의 데이터 보관일 수 입니다. | number | 90 | No |
-| flow_log_cloudwatch_log_group_kms_key_id        | VPC Flow Logs 용 Cloud CloudWatch 로그 그룹 적재에 사용할 KMS 암호화 키 입니다. | string | - | No |
-| create_private_domain_hostzone                  | Route53 private host-zone 에 private domain 레코드를 생성할지 여부입니다.. | bool | false | No |
-| context                                         | 프로젝트에 관한 리소스를 생성 및 관리에 참조 되는 정보로 표준화된 네이밍 정책 및 리소스를 위한 속성 정보를 포함하며 이를 통해 데이터 소스 참조에도 활용됩니다. | object({}) | - | Yes |
-| _________________________________               | ____________________________________________________ | _ | _ | _ |
+타입의 정본은 `requirements/REQUIREMENTS.md` 4절과 4.3절이다. 아래 표는 요약이며, 각 변수의 `description`에 호출 예시가 있다.
 
+| 이름 | 타입 요약 | 기본값 | 설명 |
+| --- | --- | --- | --- |
+| `context` | `object` | 필수 | tfmodule-context 출력. `name_prefix`, `tags`, `region`, `pri_domain`을 쓴다 |
+| `vpc_cidr` | `string` | 필수 | VPC 기본 IPv4 CIDR. 변경 시 재생성 |
+| `secondary_cidrs` | `set(string)` | `[]` | 보조 IPv4 CIDR. CIDR 문자열이 리소스 키 |
+| `enable_ipv6` | `bool` | `false` | Amazon 제공 IPv6 /56 할당. `false`면 모든 IPv6 입력이 plan 실패 |
+| `shared_public` | `object({ tags, nacl, subnets })` | `null` | Shared Public Network. 서브넷은 `igw` 기본 경로를 가진 RT를 가리켜야 한다 |
+| `vpc_endpoint_subnets` | `map(object)` | `{}` | Interface Endpoint ENI 전용 서브넷. 기본 경로 없는 RT, AZ당 1개 |
+| `stack_subnets` | `map(object)` | `{}` | 워크로드 스택. 서브넷 평면 Map, 스택 NACL, Subnet Group 네 종류(`db_subnet_group`·`elasticache_subnet_group`·`redshift_subnet_group`·`memorydb_subnet_group`), 스택 태그 |
+| `route_tables` | `map(object)` | `{}` | Route Table. `routes`는 목적지 CIDR → 대상(`gateway`·`nat_gateway`·`eni`·`network_interface_id` 중 하나), `propagate_vgw` |
+| `nat_gateways` | `map(object)` | `{}` | NAT Gateway. `public_subnet`은 Shared Public 서브넷 이름, `eip_allocation_id`로 EIP 재사용 |
+| `eni_interfaces` | `map(object)` | `{}` | 모듈이 만드는 ENI. NAT 인스턴스용은 `source_dest_check = false`. SG는 `security_group_names`(모듈 SG)와 `security_group_ids`(호출자 SG) 합집합 |
+| `security_groups` | `map(object)` | `{}` | 모듈이 만드는 SG와 룰. 룰은 이름 키 Map이며 독립 리소스. 키 `vpce`는 예약 |
+| `vpc_endpoints` | `object({ gateway, interface })` | `null` | Gateway Endpoint는 모든 RT에 연결, Interface Endpoint는 `vpc_endpoint_subnets`에 ENI 생성 |
+| `vpn_gateway` | `object` | `null` | VGW 생성 또는 `existing_id` 연결. ASN은 문자열 |
+| `customer_gateways` | `map(object)` | `{}` | Customer Gateway(`ipsec.1`). ASN은 문자열 |
+| `flow_log` | `object({ destinations })` | `null` | VPC Flow Log. `destinations` 항목 하나가 Flow Log 하나(`cloud-watch-logs`·`s3`·`kinesis-data-firehose`). 목적지 리소스는 만들지 않고 ARN만 참조한다 |
+| `private_dns` | `object` | `null` | Private Hosted Zone. `domain_name` 생략 시 `context.pri_domain` |
+| `dhcp_options` | `object` | `null` | DHCP Options. `domain_name` 생략 시 `context.pri_domain` |
+| `tags` | `map(string)` | `{}` | 모든 리소스에 적용하는 모듈 공통 태그 |
+
+태그는 `merge(context.tags, tags, <인스턴스별 tags>, { Name })` 순서로 병합하고 `Name`은 보호 키다. plan에서 드러나지 않는 제약(미연결 ENI 경로, 룰 없는 SG, 기본 SG, `source_dest_check`)은 POLICIES 6.3절 표를 따른다.
 
 ## Outputs
 
-| Name | Description |
-|------|-------------|
-| azs  |	A list of availability zones specified as argument to this module  |
-| cgw_arns  |	List of ARNs of Customer Gateway  |
-| cgw_ids  |	List of IDs of Customer Gateway  |
-| database_internet_gateway_route_id  |	ID of the database internet gateway route.  |
-| database_ipv6_egress_route_id  |	ID of the database IPv6 egress route.  |
-| database_nat_gateway_route_ids  |	List of IDs of the database nat gateway route.  |
-| database_network_acl_arn  |	ARN of the database network ACL  |
-| database_network_acl_id  |	ID of the database network ACL  |
-| database_route_table_association_ids  |	List of IDs of the database route table association  |
-| database_route_table_ids  |	List of IDs of database route tables  |
-| database_subnet_arns  |	List of ARNs of database subnets  |
-| database_subnet_group  |	ID of database subnet group  |
-| database_subnet_group_name  |	Name of database subnet group  |
-| database_subnets  |	List of IDs of database subnets  |
-| database_subnets_cidr_blocks  |	List of cidr_blocks of database subnets  |
-| database_subnets_ipv6_cidr_blocks  |	List of IPv6 cidr_blocks of database subnets in an IPv6 enabled VPC  |
-| default_network_acl_id  |	The ID of the default network ACL  |
-| default_route_table_id  |	The ID of the default route table  |
-| default_security_group_id  |	The ID of the security group created by default on VPC creation  |
-| default_vpc_arn  |	The ARN of the Default VPC  |
-| default_vpc_cidr_block  |	The CIDR block of the Default VPC  |
-| default_vpc_default_network_acl_id  |	The ID of the default network ACL of the Default VPC  |
-| default_vpc_default_route_table_id  |	The ID of the default route table of the Default VPC  |
-| default_vpc_default_security_group_id  |	The ID of the security group created by default on Default VPC creation  |
-| default_vpc_enable_dns_hostnames  |	Whether or not the Default VPC has DNS hostname support  |
-| default_vpc_enable_dns_support  |	Whether or not the Default VPC has DNS support  |
-| default_vpc_id  |	The ID of the Default VPC  |
-| default_vpc_instance_tenancy  |	Tenancy of instances spin up within Default VPC  |
-| default_vpc_main_route_table_id  |	The ID of the main route table associated with the Default VPC  |
-| dhcp_options_id  |	The ID of the DHCP options  |
-| egress_only_internet_gateway_id  |	The ID of the egress only Internet Gateway  |
-| igw_arn  |	The ARN of the Internet Gateway  |
-| igw_id  |	The ID of the Internet Gateway  |
-| intra_network_acl_arn  |	ARN of the intra network ACL  |
-| intra_network_acl_id  |	ID of the intra network ACL  |
-| intra_route_table_association_ids  |	List of IDs of the intra route table association  |
-| intra_route_table_ids  |	List of IDs of intra route tables  |
-| intra_subnet_arns  |	List of ARNs of intra subnets  |
-| intra_subnets  |	List of IDs of intra subnets  |
-| intra_subnets_cidr_blocks  |	List of cidr_blocks of intra subnets  |
-| intra_subnets_ipv6_cidr_blocks  |	List of IPv6 cidr_blocks of intra subnets in an IPv6 enabled VPC  |
-| name  |	The name of the VPC specified as argument to this module  |
-| nat_ids  |	List of allocation ID of Elastic IPs created for AWS NAT Gateway  |
-| nat_public_ips  |	List of public Elastic IPs created for AWS NAT Gateway  |
-| natgw_ids  |	List of NAT Gateway IDs  |
-| outpost_network_acl_arn  |	ARN of the outpost network ACL  |
-| outpost_network_acl_id  |	ID of the outpost network ACL  |
-| outpost_subnet_arns  |	List of ARNs of outpost subnets  |
-| outpost_subnets  |	List of IDs of outpost subnets  |
-| outpost_subnets_cidr_blocks  |	List of cidr_blocks of outpost subnets  |
-| outpost_subnets_ipv6_cidr_blocks  |	List of IPv6 cidr_blocks of outpost subnets in an IPv6 enabled VPC  |
-| private_ipv6_egress_route_ids  |	List of IDs of the ipv6 egress route.  |
-| private_nat_gateway_route_ids  |	List of IDs of the private nat gateway route.  |
-| private_network_acl_arn  |	ARN of the private network ACL  |
-| private_network_acl_id  |	ID of the private network ACL  |
-| private_route_table_association_ids  |	List of IDs of the private route table association  |
-| private_route_table_ids  |	List of IDs of private route tables  |
-| private_subnet_arns  |	List of ARNs of private subnets  |
-| private_subnets  |	List of IDs of private subnets  |
-| private_subnets_cidr_blocks  |	List of cidr_blocks of private subnets  |
-| private_subnets_ipv6_cidr_blocks  |	List of IPv6 cidr_blocks of private subnets in an IPv6 enabled VPC  |
-| public_internet_gateway_ipv6_route_id  |	ID of the IPv6 internet gateway route.  |
-| public_internet_gateway_route_id  |	ID of the internet gateway route.  |
-| public_network_acl_arn  |	ARN of the public network ACL  |
-| public_network_acl_id  |	ID of the public network ACL  |
-| public_route_table_association_ids  |	List of IDs of the public route table association  |
-| public_route_table_ids  |	List of IDs of public route tables  |
-| public_subnet_arns  |	List of ARNs of public subnets  |
-| public_subnets  |	List of IDs of public subnets  |
-| public_subnets_cidr_blocks  |	List of cidr_blocks of public subnets  |
-| public_subnets_ipv6_cidr_blocks  |	List of IPv6 cidr_blocks of public subnets in an IPv6 enabled VPC  |
-| this_customer_gateway  |	Map of Customer Gateway attributes  |
-| vgw_arn  |	The ARN of the VPN Gateway  |
-| vgw_id  |	The ID of the VPN Gateway  |
-| vpc_arn  |	The ARN of the VPC  |
-| vpc_cidr_block  |	The CIDR block of the VPC  |
-| vpc_enable_dns_hostnames  |	Whether or not the VPC has DNS hostname support  |
-| vpc_enable_dns_support  |	Whether or not the VPC has DNS support  |
-| vpc_flow_log_cloudwatch_iam_role_arn  |	The ARN of the IAM role used when pushing logs to Cloudwatch log group  |
-| vpc_flow_log_destination_arn  |	The ARN of the destination for VPC Flow Logs  |
-| vpc_flow_log_destination_type  |	The type of the destination for VPC Flow Logs  |
-| vpc_flow_log_id  |	The ID of the Flow Log resource  |
-| vpc_id  |	The ID of the VPC  |
-| vpc_instance_tenancy  |	Tenancy of instances spin up within VPC  |
-| vpc_ipv6_association_id  |	The association ID for the IPv6 CIDR block  |
-| vpc_ipv6_cidr_block  |	The IPv6 CIDR block  |
-| vpc_main_route_table_id  |	The ID of the main route table associated with this VPC  |
-| vpc_owner_id  |	The ID of the AWS account that owns the VPC  |
-| vpc_secondary_cidr_blocks  |	List of secondary CIDR blocks of the VPC  |
+복수 리소스는 리소스 키를 그대로 키로 갖는 Map이고, 없는 단일 리소스는 `null`이다.
 
+| 출력 | 내용 |
+| --- | --- |
+| `vpc_id`, `vpc_arn`, `vpc_cidr_block`, `vpc_ipv6_cidr_block`, `vpc_owner_id` | VPC 속성 |
+| `vpc_secondary_cidr_association_ids` | 보조 CIDR → 연관 ID |
+| `igw_id`, `igw_arn`, `eigw_id` | 게이트웨이 |
+| `default_security_group_id`, `default_network_acl_id`, `default_route_table_id`, `dhcp_options_id` | 기본 리소스 |
+| `subnet_ids`, `subnet_arns`, `subnet_cidr_blocks`, `subnet_ipv6_cidr_blocks` | 서브넷 키(`shared-network/public/<name>`, `shared-network/vpce/<name>`, `<stack>/<name>`) → 값 |
+| `shared_network` | Shared Public·VPC Endpoint 서브넷을 이름으로 모은 편의 출력 |
+| `nat_gateway_ids`, `nat_eip_allocation_ids`, `nat_public_ips` | NAT 키 → 값 |
+| `eni_ids`, `eni_arns`, `eni_private_ips` | ENI 키 → 값 |
+| `security_group_ids`, `security_group_arns` | SG 키 → 값 |
+| `route_table_ids`, `route_table_association_ids` | RT 키 → ID, 서브넷 키 → Association ID |
+| `network_acl_ids`, `network_acl_arns` | NACL 키(`<stack>`, `shared-network/public`) → 값 |
+| `stacks` | 스택별 `subnet_ids`(이름 → ID)와 네 유형의 `<type>_subnet_group_names`·`_arns`(`db`, `elasticache`, `redshift`, `memorydb`) |
+| `vpc_endpoint_ids`, `vpc_endpoint_dns_entries`, `vpc_endpoint_security_group_id` | Endpoint |
+| `vgw_id`, `vgw_arn`, `vgw_attachment_id` | VGW |
+| `cgw_ids`, `cgw_arns` | CGW 키 → 값 |
+| `flow_log_ids`, `flow_log_arns`, `flow_log_destination_arns` | Flow Log 목적지 키 → 값 |
+| `private_zone_id`, `private_zone_name`, `private_zone_arn` | Private Hosted Zone |
+
+## Shared Service 접근 정책 예시
+
+모듈 요구사항이 아니라 호출자가 스택 NACL(REQUIREMENTS 6.8절)과 `security_groups`(3.6절)를 설계할 때 참고할 예시다. 모듈 기본 상태는 기본 NACL 전체 허용이고(RSC-DEF-03), 모듈이 만드는 SG 는 자기가 만든 ENI 와 Interface Endpoint 에 붙는 것뿐이다.
+
+| 출발지 | 목적지 | 정책 |
+| --- | --- | --- |
+| Toolchain | Workload Management Endpoint | Allow |
+| Workload | Toolchain | Default Deny |
+| Workload | Observability Endpoint | Allow |
+| Observability | Workload | 필요 시 제한적 Allow |
+| Workload-A | Workload-B | Default Deny |
+
+POLICIES 9.4절 `eks` 기준 입력의 `toolchain` 스택 NACL 이 "Workload → Toolchain Default Deny" 를 NACL 로 구현한 예다. NACL 은 상태 비저장이고 룰의 포트 범위가 목적지 포트이므로, Toolchain 이 시작한 연결의 응답(목적지 포트 32768~65535)만 워크로드 대역에서 허용하고 나머지는 deny 한다. 32768 이상 포트로 연 서비스는 NACL 로 막을 수 없으므로 Security Group 으로 막는다.
+
+같은 정책을 모듈의 `security_groups` 로 표현하면 다음과 같다. 룰은 이름을 키로 하는 Map 이고 소스는 다섯 필드 중 하나만 적는다(RSC-SG-04). 모듈 SG 끼리는 `referenced_security_group_name` 으로, 호출자가 만든 SG 는 `referenced_security_group_id` 로 가리킨다.
+
+```hcl
+security_groups = {
+  toolchain-endpoint = {
+    description = "Toolchain internal endpoint ENI"
+
+    # "Workload -> Toolchain Default Deny" 는 룰을 적지 않는 것으로 표현된다.
+    # 필요한 대역·SG 만 열면 나머지는 자동으로 막힌다.
+    ingress = {
+      workload-https = { ip_protocol = "tcp", from_port = 443, to_port = 443, cidr_ipv4 = "10.100.32.0/19", description = "Workload management endpoint" }
+      obsv-otlp      = { ip_protocol = "tcp", from_port = 4317, to_port = 4318, referenced_security_group_name = "obsv-collector", description = "Observability collector" }
+    }
+
+    egress = {
+      https = { ip_protocol = "tcp", from_port = 443, to_port = 443, cidr_ipv4 = "0.0.0.0/0", description = "Outbound HTTPS" }
+    }
+
+    tags = { ServiceRole = "toolchain" }
+  }
+
+  # 룰이 없는 SG. 두 방향 모두 차단이며 참조 대상으로만 쓴다(RSC-SG-05).
+  obsv-collector = { description = "Observability collector ENI" }
+}
+```
+
+NACL 과 다른 점이 둘이다.
+
+- Security Group 은 상태 저장이라 응답 트래픽을 따로 열지 않는다. 위의 "Toolchain 이 시작한 연결의 응답" 을 NACL 에서는 32768~65535 로 열어야 하지만 SG 에서는 인바운드 룰 하나면 된다.
+- "Default Deny" 가 룰을 적지 않는 것으로 표현된다. 모듈이 만든 SG 는 생성 시점에 AWS 기본 아웃바운드 허용 룰이 회수되므로, 아웃바운드가 필요하면 `egress` 를 반드시 적어야 한다(RSC-SG-05).
+
+워크로드(EC2, ECS, EKS 노드, RDS)에 붙는 SG 는 이 모듈이 만들지 않는다. 위 예시는 모듈이 만든 ENI 에 붙일 SG 를 선언하는 형식을 보이는 것이고, 같은 형식을 워크로드 모듈에서도 쓸 수 있다.
+
+## 검증
+
+절차와 판정 기준은 `requirements/POLICIES.md` 5절이 정의한다.
+
+```bash
+terraform fmt -check *.tf
+terraform init -backend=false && terraform validate
+```
+
+여기까지는 clone 직후 바로 돌아간다. 아래 두 단계는 검증 자산이 필요하다. 기준 입력(POLICIES 9.4절), `tests/*.tftest.hcl`(POLICIES 9.5절), `examples/<이름>/` 호출 스택은 `.gitignore`로 제외된 로컬 자산이라 저장소에 없으며, 요구사항 문서를 보고 로컬에서 만든 뒤 실행한다.
+
+```bash
+terraform test -filter=tests/<대상>.tftest.hcl \
+  -var-file=requirements/<기준 입력>.tfvars -var-file=tests/context.tfvars
+cd examples/<이름> && terraform init && terraform plan -var-file=../../requirements/<기준 입력>.tfvars
+```
+
+`apply`와 `destroy`는 이 저장소에서 실행하지 않는다. `terraform test`는 `mock_provider`로 실행해 AWS를 호출하지 않으므로 이 금지의 대상이 아니다. 검증 항목은 POLICIES 9.5절(`TST-01`~`TST-39`), 실패 케이스는 4.1절 표(`V-01`~`V-27`, `P-01`~`P-23`)를 따른다.
