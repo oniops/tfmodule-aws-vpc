@@ -1,5 +1,5 @@
 # Locals only flatten nested inputs into for_each maps and precompute checks. No input
-# value is transformed on the way to a resource argument (POLICIES 2.3).
+# value is transformed on the way to a resource argument (ARCHITECTURE 12.3).
 locals {
   prefix    = var.context.name_prefix
   tags_base = merge(var.context.tags, var.tags)
@@ -55,7 +55,7 @@ locals {
 
   subnets = merge(local.shared_public_subnets, local.vpce_subnets, local.stack_subnets)
   # Grouped so a duplicated subnet name does not abort this local; the aws_vpc precondition
-  # must be the thing that reports it (POLICIES 6.2.2). Consumers take element 0.
+  # must be the thing that reports it (ARCHITECTURE 9.2.2). Consumers take element 0.
   subnet_key_by_name = { for k, s in local.subnets : s.name => k... }
   subnet_ipv6_index  = [for s in local.subnets : s.ipv6_index if s.ipv6_index != null]
 
@@ -133,14 +133,12 @@ locals {
   ################################################################################
   # VPC Endpoints.
   ################################################################################
-  vpc_endpoints_gateway   = var.vpc_endpoints == null ? toset([]) : var.vpc_endpoints.gateway
-  vpc_endpoints_interface = var.vpc_endpoints == null ? {} : var.vpc_endpoints.interface
   gateway_endpoint_rts = {
-    for p in setproduct(local.vpc_endpoints_gateway, keys(var.route_tables)) : "${p[0]}/${p[1]}" => { service = p[0], rt = p[1] }
+    for p in setproduct(var.vpc_endpoints.gateway, keys(var.route_tables)) : "${p[0]}/${p[1]}" => { service = p[0], rt = p[1] }
   }
 
   ################################################################################
-  # IPv4 CIDR arithmetic for the VPC-wide checks (POLICIES 6.1, P-02).
+  # IPv4 CIDR arithmetic for the VPC-wide checks (ARCHITECTURE 9.1, P-02).
   # Terraform 1.5 has no cidrcontains(); ranges are compared as integers.
   ################################################################################
   vpc_cidrs = concat([var.vpc_cidr], tolist(var.secondary_cidrs))

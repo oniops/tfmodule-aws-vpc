@@ -3,7 +3,7 @@
 ################################################################################
 
 resource "aws_vpc_endpoint" "gateway" {
-  for_each = local.vpc_endpoints_gateway
+  for_each = var.vpc_endpoints.gateway
 
   vpc_id            = aws_vpc.this.id
   service_name      = "com.amazonaws.${var.context.region}.${each.value}"
@@ -22,10 +22,10 @@ resource "aws_vpc_endpoint" "gateway" {
 locals {
   vpce_subnet_ids = [for k, s in local.vpce_subnets : aws_subnet.this[k].id]
   vpce_security_group_ids = {
-    for svc, e in local.vpc_endpoints_interface : svc => concat(
+    for svc, e in var.vpc_endpoints.interface : svc => concat(
       # Same guard as eni.tf: filter here, report the missing key in the precondition.
-      [for n in coalesce(e.security_group_names, []) : aws_security_group.this[n].id if contains(keys(var.security_groups), n)],
-      tolist(coalesce(e.security_group_ids, []))
+      [for n in e.security_group_names : aws_security_group.this[n].id if contains(keys(var.security_groups), n)],
+      tolist(e.security_group_ids)
     )
   }
   create_vpce_security_group = length([for svc, ids in local.vpce_security_group_ids : svc if length(ids) == 0]) > 0
@@ -69,7 +69,7 @@ resource "aws_vpc_security_group_ingress_rule" "vpce_ipv6" {
 }
 
 resource "aws_vpc_endpoint" "interface" {
-  for_each = local.vpc_endpoints_interface
+  for_each = var.vpc_endpoints.interface
 
   vpc_id              = aws_vpc.this.id
   service_name        = "com.amazonaws.${var.context.region}.${each.key}"
@@ -91,8 +91,8 @@ resource "aws_vpc_endpoint" "interface" {
       error_message = "Interface Endpoint ${each.key} needs context.region to build the service name (RSC-VPCE-02)."
     }
     precondition {
-      condition     = alltrue([for n in coalesce(each.value.security_group_names, []) : contains(keys(var.security_groups), n)])
-      error_message = "Interface Endpoint ${each.key}: security_group_names contains a key not declared in security_groups (RSC-VPCE-02)."
+      condition     = alltrue([for n in each.value.security_group_names : contains(keys(var.security_groups), n)])
+      error_message = "Interface Endpoint ${each.key}: security_group_names contains ${join(", ", [for n in each.value.security_group_names : "\"${n}\"" if !contains(keys(var.security_groups), n)])}, which is not a key of security_groups (RSC-VPCE-02). Declared keys: ${join(", ", keys(var.security_groups))}. Use security_group_ids for security groups the caller created."
     }
   }
 }
