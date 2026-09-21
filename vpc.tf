@@ -1,6 +1,6 @@
 ################################################################################
 # VPC (RSC-VPC-01..05). VPC-wide input checks that need more than one variable
-# are gathered here as preconditions and evaluated once (POLICIES 6.2.2).
+# are gathered here as preconditions and evaluated once (ARCHITECTURE 9.2.2).
 ################################################################################
 
 resource "aws_vpc" "this" {

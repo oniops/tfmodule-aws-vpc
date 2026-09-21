@@ -28,7 +28,7 @@ resource "aws_route_table_association" "this" {
   lifecycle {
     precondition {
       condition     = contains(keys(var.route_tables), each.value.route_table)
-      error_message = "Subnet ${each.key} points to route table \"${each.value.route_table}\" which is not declared in route_tables."
+      error_message = "Subnet ${each.key} points to route table \"${each.value.route_table}\" which is not declared in route_tables. Declared keys: ${join(", ", keys(var.route_tables))}."
     }
     precondition {
       condition     = each.value.group != "shared-public" || try(var.route_tables[each.value.route_table].routes["0.0.0.0/0"].gateway, null) == "igw"

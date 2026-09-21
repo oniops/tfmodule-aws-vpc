@@ -218,17 +218,17 @@ output "cgw_arns" {
 }
 
 output "flow_log_ids" {
-  description = "Flow Log destination key -> Flow Log ID"
+  description = "flow_logs key -> Flow Log ID"
   value       = { for k, f in aws_flow_log.this : k => f.id }
 }
 
 output "flow_log_arns" {
-  description = "Flow Log destination key -> Flow Log ARN"
+  description = "flow_logs key -> Flow Log ARN"
   value       = { for k, f in aws_flow_log.this : k => f.arn }
 }
 
 output "flow_log_destination_arns" {
-  description = "Flow Log destination key -> the destination ARN the flow log writes to"
+  description = "flow_logs key -> the destination ARN the flow log writes to"
   value       = { for k, f in aws_flow_log.this : k => f.log_destination }
 }
 

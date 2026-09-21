@@ -7,7 +7,7 @@
 ################################################################################
 
 resource "aws_flow_log" "this" {
-  for_each = var.flow_log == null ? {} : var.flow_log.destinations
+  for_each = var.flow_logs
 
   vpc_id                   = aws_vpc.this.id
   log_destination          = each.value.log_destination_arn

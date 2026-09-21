@@ -40,11 +40,11 @@ resource "aws_route" "this" {
   lifecycle {
     precondition {
       condition     = each.value.tgt.nat_gateway == null ? true : contains(keys(var.nat_gateways), each.value.tgt.nat_gateway)
-      error_message = "Route ${each.key} targets a nat_gateway key that is not declared in nat_gateways."
+      error_message = "Route ${each.key} targets nat_gateway = \"${each.value.tgt.nat_gateway == null ? "" : each.value.tgt.nat_gateway}\" which is not a key of nat_gateways. Declared keys: ${join(", ", keys(var.nat_gateways))}."
     }
     precondition {
       condition     = each.value.tgt.eni == null ? true : contains(keys(var.eni_interfaces), each.value.tgt.eni)
-      error_message = "Route ${each.key} targets an eni key that is not declared in eni_interfaces."
+      error_message = "Route ${each.key} targets eni = \"${each.value.tgt.eni == null ? "" : each.value.tgt.eni}\" which is not a key of eni_interfaces. Declared keys: ${join(", ", keys(var.eni_interfaces))}."
     }
     precondition {
       condition     = !contains(local.vpc_cidrs, each.value.dest)

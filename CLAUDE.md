@@ -4,7 +4,7 @@
 
 IMPORTANT: 이 저장소는 재사용 모듈만 담는다. 루트와 `examples/` 어디서도 `terraform apply`, `terraform destroy`를 실행하지 않으며, 검증은 `validate`와 `examples/` 임시 스택의 `plan`까지만 한다.
 
-IMPORTANT: 모듈 구현에 관한 규칙(코드 컨벤션, 입력 변수·출력 구조, Terraform 설계 원칙, 테스트 절차)은 `requirements/POLICIES.md`가 정의한다. 이 문서는 저장소 운영 규칙만 담으며 구현 규칙을 다시 적지 않는다.
+IMPORTANT: 모듈 구현에 관한 규칙(강제 규칙·검증과 테스트 절차는 `requirements/REQUIREMENTS.md`, 코드 컨벤션·입력 변수·출력 구조·검사 배치는 `requirements/ARCHITECTURE.md`)은 이 두 문서가 정의한다. 이 문서는 저장소 운영 규칙만 담으며 구현 규칙을 다시 적지 않는다.
 
 ## 1. 프로젝트 개요
 
@@ -15,16 +15,16 @@ AWS VPC와 부속 네트워크 리소스(서브넷, 라우트 테이블, NAT/IGW
 - 원격 저장소: `github.com/oniops/tfmodule-aws-vpc`
 - 기본 브랜치: `main`
 - 릴리스: `vX.Y.Z` 태그. 사용자는 `?ref=`로 태그를 고정해 참조한다
-- 모듈에는 `provider`, `backend` 블록이 없다. 사용 예시는 `README.md`의 Usage 절이 유일하다. 검증 자산(`tests/`, `examples/`, 기준 입력 tfvars)은 `.gitignore`로 제외되며 그것을 정의하는 요구사항 문서만 저장소에 남는다(README절)
+- 모듈에는 `provider`, `backend` 블록이 없다. 사용 예시는 `README.md`의 Usage 절이 유일하다. 검증 자산(`tests/`, `examples/`, 기준 입력 tfvars)은 `.gitignore`로 제외되며 그것을 정의하는 요구사항 문서만 저장소에 남는다(REQUIREMENTS 문서 머리말)
 
 ## 2. 기술 스택
 
 | 구분 | 값 | 출처 |
 | --- | --- | --- |
-| Terraform | `>= 1.5.7` | `versions.tf`. 근거는 POLICIES 9.3절 |
+| Terraform | `>= 1.5.7` | `versions.tf`. 근거는 REQUIREMENTS 8.3절 |
 | AWS provider | `>= 6.0, < 7.0` | `versions.tf`. 2026-09-19 `validate`(CLI 1.5.7)·`terraform test` 통과(6.64.0) |
-| 의존 모듈 | tfmodule-context `v1.3.5` | ARCHITECTURE 10절 |
-| 테스트 | `mock_provider` 기반 `terraform test` | 로컬 `tests/`(git 제외). 절차는 POLICIES 9.2절, 항목은 POLICIES 9.5절 |
+| 의존 모듈 | tfmodule-context `v1.3.5` 이상 | ARCHITECTURE 11절. 하위 버전 금지 근거는 REQUIREMENTS 10절 DEC-101 |
+| 테스트 | `mock_provider` 기반 `terraform test` | 로컬 `tests/`(git 제외). 절차는 REQUIREMENTS 8.2절, 항목은 REQUIREMENTS 8.5절 |
 | CI 시스템 | 없음 | 회귀는 4절 명령을 수동으로 돌려 확인한다 |
 
 버전 제약을 바꾸면 `.terraform.lock.hcl`을 지우고 `terraform init -backend=false`를 다시 실행해 lock이 새 제약과 일치하는지 확인한다.
@@ -34,25 +34,25 @@ AWS VPC와 부속 네트워크 리소스(서브넷, 라우트 테이블, NAT/IGW
 | 경로 | 역할 |
 | --- | --- |
 | 루트 `*.tf` | 모듈 본체. `variables-context.tf`(context), `variables.tf`(입력과 `validation`), `locals.tf`(flatten과 CIDR 검사), `vpc.tf`(VPC·IGW·EIGW·기본 리소스·DHCP), `subnets.tf`(서브넷·Association·Subnet Group), `route-tables.tf`(RT·경로·VGW 전파·Gateway Endpoint 연결), `nat.tf`, `eni.tf`(SG·룰·ENI), `nacl.tf`, `vpc-endpoints.tf`, `vpn.tf`, `flow-logs.tf`, `route53.tf`, `outputs.tf` |
-| `versions.tf` | `required_version`과 provider 제약. 이 파일 외에 `terraform {}` 블록을 두지 않는다. 하한의 근거는 POLICIES 9.3절 |
-| `requirements/` | 요구사항 문서 세트. `README.md`(문서 지도), `REQUIREMENTS.md`(무엇을 만족해야 하는가), `ARCHITECTURE.md`(어떤 구조로), `POLICIES.md`(어떤 규칙으로), `DECISIONS.md`(왜 그렇게 결정했는가). 이 디렉터리에서 저장소에 남는 것은 `*.md`뿐이며, 검증에 쓰는 `*.tfvars`는 POLICIES 9.4절이 정의하는 로컬 자산이다 |
-| `tests/` | `terraform test` 케이스. 모듈 루트 리소스를 `assert`해야 하므로 루트에 둔다(POLICIES 9.2절). `mock_provider`로 AWS를 호출하지 않는다. `.gitignore`로 제외된 로컬 검증 자산이라 평소에는 없을 수 있고, 검증 항목의 정본은 POLICIES 9.5절이다 |
+| `versions.tf` | `required_version`과 provider 제약. 이 파일 외에 `terraform {}` 블록을 두지 않는다. 하한의 근거는 REQUIREMENTS 8.3절 |
+| `requirements/` | 요구사항 문서 세트. `REQUIREMENTS.md`(무엇을 만족해야 하고 어떤 규칙을 강제하며 어떻게 검증하고 왜 그렇게 결정했는가), `ARCHITECTURE.md`(어떤 모델로 표현하고 무엇을 주고받으며 코드는 어떻게 구성되는가). 이 디렉터리에서 저장소에 남는 것은 `*.md`뿐이며, 검증에 쓰는 `*.tfvars`는 REQUIREMENTS 8.4절이 정의하는 로컬 자산이다 |
+| `tests/` | `terraform test` 케이스. 모듈 루트 리소스를 `assert`해야 하므로 루트에 둔다(REQUIREMENTS 8.2절). `mock_provider`로 AWS를 호출하지 않는다. `.gitignore`로 제외된 로컬 검증 자산이라 평소에는 없을 수 있고, 검증 항목의 정본은 REQUIREMENTS 8.5절이다 |
 | `examples/<이름>/` | 검증용 임시 호출 스택. 저장소에 남기지 않으므로 평소에는 없고 검증할 때 만든다. `provider "aws"` 블록과 `source = "../../"` 모듈 호출을 두고 plan으로 확인한다. tfmodule-context가 STS를 호출하므로 자격 증명 없이 plan하려면 동등한 `context` 객체를 로컬에서 만드는 스택을 따로 둔다. `terraform test` 케이스는 여기가 아니라 모듈 루트 `tests/`에 둔다 |
 
 빌드 산출물은 없다. `.gitignore`가 제외하는 것은 `.terraform/`, `*.tfstate`, `.terraform.lock.hcl`, `/.idea/`, `/target/`, 그리고 검증 자산인 `/examples/`, `/tests/`, `/requirements/*.tfvars`, `/requirements/*.png`다. 저장소에 남는 것은 모듈 `*.tf`, `requirements/*.md`, `README.md`, `CLAUDE.md`, `LICENSE`뿐이다.
 
 ## 4. 빌드 · 실행 · 테스트 명령
 
-아래 표는 빠른 참조용이며 정본은 POLICIES 9.1절이다.
+아래 표는 빠른 참조용이며 정본은 REQUIREMENTS 8.1절이다.
 
 | 구분 | 명령 | 비고 |
 | --- | --- | --- |
 | 포맷 | `terraform fmt -check *.tf` (로컬에 `tests/`가 있으면 `terraform fmt -check -recursive tests/`도) | `examples/`는 대상이 아니므로 `-recursive`를 루트 전체에 쓰지 않는다 |
 | 검증 | `terraform init -backend=false && terraform validate` | — |
 | 계획 | `cd examples/<이름> && terraform init && terraform plan` | AWS 자격 증명 필요, 읽기 전용 |
-| 테스트 | `terraform test -filter=tests/<대상>.tftest.hcl -var-file=requirements/<기준 입력>.tfvars -var-file=tests/context.tfvars` | 루트에서 실행. `mock_provider`가 Terraform CLI 1.7 이상을 요구한다(POLICIES 9.3절). 모듈 `required_version`은 올리지 않는다 |
+| 테스트 | `terraform test -filter=tests/<대상>.tftest.hcl -var-file=requirements/<기준 입력>.tfvars -var-file=tests/context.tfvars` | 루트에서 실행. `mock_provider`가 Terraform CLI 1.7 이상을 요구한다(REQUIREMENTS 8.3절). 모듈 `required_version`은 올리지 않는다 |
 
-각 명령의 적용 범위, 실행 순서, 판정 기준, Terraform 버전 요구사항은 POLICIES 9절이 정의한다.
+각 명령의 적용 범위, 실행 순서, 판정 기준, Terraform 버전 요구사항은 REQUIREMENTS 8절이 정의한다.
 
 ## 5. 필수 작업 지침
 
@@ -82,7 +82,7 @@ AWS VPC와 부속 네트워크 리소스(서브넷, 라우트 테이블, NAT/IGW
 - 모듈 단위의 기능 구현을 추가하면 Mock 테스트를 작성하고 통과시킨다.
 - 버그를 수정할 때는 먼저 실패하는 회귀 테스트를 작성한 다음, 수정 사항을 구현하여 통과시킨다.
 - 단위 또는 통합 테스트에서 실제 네트워크 및 외부 API 호출을 금지한다.
-- 단위 테스트 프레임워크가 없는 저장소(IaC, 문서 등)는 POLICIES 9절에 정의한 검증 절차를 대신 따른다.
+- 단위 테스트 프레임워크가 없는 저장소(IaC, 문서 등)는 REQUIREMENTS 8절에 정의한 검증 절차를 대신 따른다.
 
 #### 5. 운영 안전 원칙
 
@@ -108,6 +108,6 @@ AWS VPC와 부속 네트워크 리소스(서브넷, 라우트 테이블, NAT/IGW
 | 커밋 메시지 | `<JIRA-KEY> <한글 요약>` 한 줄. 예: `OI-1283 VGW 태그 속성값 보완` |
 | 브랜치 | `feature/<JIRA-KEY>`. 예: `feature/OI-1283` |
 | 이력 | 머지 커밋이 없는 선형 이력을 유지한다 |
-| 릴리스 | `main`에 `vX.Y.Z` 태그. 기존 태그는 옮기지 않는다. MAJOR를 올리는 기준은 POLICIES 2절을 따른다 |
-| 커밋 단위 | README 표 동시 갱신과 포맷 전용 커밋 분리는 POLICIES 2절 규칙을 따른다 |
-| 스테이징 제외 | 검증 자산(`examples/`, `tests/`, `requirements/*.tfvars`, `requirements/*.png`)은 스테이징하지 않는다. `.gitignore`가 이미 제외하고 있으며 `git add -f`로 우회하지 않는다. 저장소에 남기자는 요청이 있으면 `.gitignore` 수정과 README절 갱신을 먼저 제안한다 |
+| 릴리스 | `main`에 `vX.Y.Z` 태그. 기존 태그는 옮기지 않는다. MAJOR를 올리는 기준은 ARCHITECTURE 12절을 따른다 |
+| 커밋 단위 | README 표 동시 갱신과 포맷 전용 커밋 분리는 ARCHITECTURE 12절 규칙을 따른다 |
+| 스테이징 제외 | 검증 자산(`examples/`, `tests/`, `requirements/*.tfvars`, `requirements/*.png`)은 스테이징하지 않는다. `.gitignore`가 이미 제외하고 있으며 `git add -f`로 우회하지 않는다. 저장소에 남기자는 요청이 있으면 `.gitignore` 수정과 REQUIREMENTS 문서 머리말 갱신을 먼저 제안한다 |

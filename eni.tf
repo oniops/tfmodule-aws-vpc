@@ -56,8 +56,8 @@ locals {
     for k, e in var.eni_interfaces : k => concat(
       # Only look up keys that exist so the precondition below reports the bad key
       # instead of Terraform failing on an invalid index while evaluating this local.
-      [for n in coalesce(e.security_group_names, []) : aws_security_group.this[n].id if contains(keys(var.security_groups), n)],
-      tolist(coalesce(e.security_group_ids, []))
+      [for n in e.security_group_names : aws_security_group.this[n].id if contains(keys(var.security_groups), n)],
+      tolist(e.security_group_ids)
     )
   }
 
@@ -87,8 +87,8 @@ resource "aws_network_interface" "this" {
       error_message = "ENI ${each.key}: subnet \"${each.value.subnet}\" is not a subnet of this module (RSC-ENI-02)."
     }
     precondition {
-      condition     = alltrue([for n in coalesce(each.value.security_group_names, []) : contains(keys(var.security_groups), n)])
-      error_message = "ENI ${each.key}: security_group_names contains a key not declared in security_groups (RSC-ENI-05)."
+      condition     = alltrue([for n in each.value.security_group_names : contains(keys(var.security_groups), n)])
+      error_message = "ENI ${each.key}: security_group_names contains ${join(", ", [for n in each.value.security_group_names : "\"${n}\"" if !contains(keys(var.security_groups), n)])}, which is not a key of security_groups (RSC-ENI-05). Declared keys: ${join(", ", keys(var.security_groups))}. Use security_group_ids for security groups the caller created."
     }
   }
 }
